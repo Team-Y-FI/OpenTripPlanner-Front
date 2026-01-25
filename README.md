@@ -1,4 +1,4 @@
-# TripFlow - 여행 플래너 앱
+# OpenTripPlanner - 여행 플래너 앱
 
 React Native + Expo로 만든 사진 기반 여행 플랜 생성 앱입니다.
 

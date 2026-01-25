@@ -15,9 +15,9 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <LinearGradient colors={['#6366f1', '#38bdf8']} style={styles.logo}>
-            <Text style={styles.logoText}>T</Text>
+            <Text style={styles.logoText}>O</Text>
           </LinearGradient>
-          <Text style={styles.headerTitle}>TripFlow</Text>
+          <Text style={styles.headerTitle}>OpenTripPlanner</Text>
         </View>
         <Pressable onPress={() => router.push('/records')}>
           <Text style={styles.headerLink}>내 기록</Text>

@@ -31,9 +31,9 @@ export default function RecordsScreen() {
           </Pressable>
           <View style={styles.headerContent}>
             <LinearGradient colors={['#6366f1', '#38bdf8']} style={styles.logo}>
-              <Text style={styles.logoText}>T</Text>
+              <Text style={styles.logoText}>O</Text>
             </LinearGradient>
-            <Text style={styles.headerTitle}>TripFlow</Text>
+            <Text style={styles.headerTitle}>OpenTripPlanner</Text>
           </View>
           <View style={{ width: 40 }} />
         </View>
