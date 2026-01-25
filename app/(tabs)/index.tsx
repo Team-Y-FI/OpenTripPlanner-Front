@@ -1,98 +1,602 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const router = useRouter();
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  return (
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+      {/* 헤더 */}
+      <View style={styles.header}>
+        <View style={styles.headerContent}>
+          <LinearGradient colors={['#6366f1', '#38bdf8']} style={styles.logo}>
+            <Text style={styles.logoText}>T</Text>
+          </LinearGradient>
+          <Text style={styles.headerTitle}>TripFlow</Text>
+        </View>
+        <Pressable onPress={() => router.push('/records')}>
+          <Text style={styles.headerLink}>내 기록</Text>
+        </Pressable>
+      </View>
+
+      {/* 히어로 섹션 */}
+      <View style={styles.hero}>
+        <View style={styles.heroText}>
+          <Text style={styles.tagline}>여행 플랜 · 동선 최적화</Text>
+          <Text style={styles.title}>사진 한 장으로 시작하는{'\n'}나만의 동선 플래너</Text>
+          <Text style={styles.description}>
+            사진 업로드로 장소를 자동 인식하고, 시간·예산·교통수단만 입력하면{'\n'}
+            혼잡도와 교통까지 반영한 A/B 여행 코스를 만들어 드려요.
+          </Text>
+        </View>
+
+        {/* 예시 카드 */}
+        <View style={styles.exampleCard}>
+          <View style={styles.exampleHeader}>
+            <Text style={styles.exampleHeaderText}>오늘 같이 갈까?</Text>
+            <View style={styles.pulse}>
+              <View style={styles.pulseDot} />
+              <Text style={styles.exampleHeaderSubtext}>실시간 플랜 생성 중</Text>
+            </View>
+          </View>
+
+          <View style={styles.exampleContent}>
+            <View style={styles.exampleLeft}>
+              <View style={styles.exampleImageContainer}>
+                <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.exampleImage}>
+                  <Text style={styles.exampleImageText}>홍대 카페</Text>
+                </LinearGradient>
+                <View style={styles.exampleBadge}>
+                  <Text style={styles.exampleBadgeText}>사진 기반 스팟 인식 완료 · 홍대입구 인근</Text>
+                </View>
+              </View>
+
+              <View style={styles.exampleInfoCard}>
+                <View style={styles.exampleInfoHeader}>
+                  <Text style={styles.exampleInfoTitle}>오늘 3시간 · 대중교통</Text>
+                  <View style={styles.exampleInfoBadge}>
+                    <Text style={styles.exampleInfoBadgeText}>혼잡도 반영</Text>
+                  </View>
+                </View>
+                <Text style={styles.exampleInfoDesc}>카페 → 전시 → 야경 루트 자동 구성 완료</Text>
+              </View>
+            </View>
+
+            <View style={styles.exampleRight}>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>예상 소요시간</Text>
+                <Text style={styles.statValue}>3시간 10분</Text>
+              </View>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>이동 시간</Text>
+                <Text style={styles.statValue}>42분</Text>
+              </View>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>혼잡 구간 경고</Text>
+                <View style={styles.warningBadge}>
+                  <View style={styles.warningDot} />
+                  <Text style={styles.warningText}>1곳</Text>
+                </View>
+              </View>
+
+              <View style={styles.courseComparison}>
+                <View style={styles.courseARow}>
+                  <Text style={styles.courseAText}>코스 A · 감성 카페 위주</Text>
+                  <Text style={styles.recommendBadge}>추천</Text>
+                </View>
+                <View style={styles.courseBRow}>
+                  <Text style={styles.courseBText}>코스 B · 야경/전망 위주</Text>
+                  <Pressable onPress={() => router.push('/(tabs)/results')}>
+                    <Text style={styles.compareLink}>A/B 코스 비교 보기</Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* 진입 방식 선택 */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>1. 어떻게 시작할까요?</Text>
+
+        <View style={styles.entryCards}>
+          {/* 새 플랜 */}
+          <Pressable style={styles.entryCard} onPress={() => router.push('/course')}>
+            <View style={styles.entryCardHeader}>
+              <View>
+                <Text style={styles.entryCardTag}>새로운 여행 계획</Text>
+                <Text style={styles.entryCardTitle}>빈 캘린더에서 시작</Text>
+                <Text style={styles.entryCardDesc}>
+                  목적 · 지역 · 교통수단 · 예산만 입력하면{'\n'}
+                  추천 스팟과 최적 동선을 자동으로 만들어 드려요.
+                </Text>
+              </View>
+              <Text style={styles.entryCardArrow}>→</Text>
+            </View>
+            <View style={styles.entryCardTags}>
+              <View style={styles.entryTag}>
+                <Text style={styles.entryTagText}>3시간 / 반나절 / 1일</Text>
+              </View>
+              <View style={styles.entryTag}>
+                <Text style={styles.entryTagText}>도보 · 대중교통 · 차량</Text>
+              </View>
+              <View style={styles.entryTag}>
+                <Text style={styles.entryTagText}>혼잡도·교통 반영</Text>
+              </View>
+            </View>
+          </Pressable>
+
+          {/* 사진 기록 */}
+          <Pressable style={styles.entryCard} onPress={() => router.push('/upload')}>
+            <View style={styles.entryCardHeader}>
+              <View>
+                <Text style={[styles.entryCardTag, styles.entryCardTagGreen]}>사진 기반 기록</Text>
+                <Text style={styles.entryCardTitle}>사진으로 장소부터 기록</Text>
+                <Text style={styles.entryCardDesc}>
+                  여행 사진을 올리면 위치를 자동 인식하고,{'\n'}
+                  내 지도에 스팟과 개인 기록으로 차곡차곡 쌓여요.
+                </Text>
+              </View>
+              <Text style={styles.entryCardArrow}>→</Text>
+            </View>
+            <View style={styles.entryCardTags}>
+              <View style={styles.entryTag}>
+                <Text style={styles.entryTagText}>EXIF 위치 자동 읽기</Text>
+              </View>
+              <View style={styles.entryTag}>
+                <Text style={styles.entryTagText}>지도에서 직접 핀 지정</Text>
+              </View>
+              <View style={styles.entryTag}>
+                <Text style={styles.entryTagText}>사진·메모·태그 기록</Text>
+              </View>
+            </View>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* 필수 정보 카드 */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>2. 어떤 정보가 필요해요?</Text>
+
+        <View style={styles.infoCard}>
+          <View style={styles.infoColumn}>
+            <View style={styles.infoHeader}>
+              <View style={styles.infoNumber}>
+                <Text style={styles.infoNumberText}>①</Text>
+              </View>
+              <Text style={styles.infoTitle}>여행 기본 정보</Text>
+            </View>
+            <Text style={styles.infoItem}>· 지역 / 목적 (데이트, 혼자, 가족 등)</Text>
+            <Text style={styles.infoItem}>· 날짜 / 시작 시간</Text>
+            <Text style={styles.infoItem}>· 교통수단 (도보 / 대중교통 / 차량)</Text>
+            <Text style={styles.infoItem}>· 예산 대략 범위</Text>
+          </View>
+
+          <View style={styles.infoColumn}>
+            <View style={styles.infoHeader}>
+              <View style={styles.infoNumber}>
+                <Text style={styles.infoNumberText}>②</Text>
+              </View>
+              <Text style={styles.infoTitle}>코스 조건</Text>
+            </View>
+            <Text style={styles.infoItem}>· 소요 시간 (3시간 / 반나절 / 1일)</Text>
+            <Text style={styles.infoItem}>· 카테고리 (카페, 전시, 자연 등)</Text>
+            <Text style={styles.infoItem}>· 이동 속도 / 휴식 선호</Text>
+          </View>
+
+          <View style={styles.infoColumn}>
+            <View style={styles.infoHeader}>
+              <View style={styles.infoNumber}>
+                <Text style={styles.infoNumberText}>③</Text>
+              </View>
+              <Text style={styles.infoTitle}>결과 확인 & 공유</Text>
+            </View>
+            <Text style={styles.infoItem}>· A안 / B안 동선 비교</Text>
+            <Text style={styles.infoItem}>· 혼잡·교통 경고 확인</Text>
+            <Text style={styles.infoItem}>· 플랜 저장 & URL 공유</Text>
+          </View>
+        </View>
+      </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  container: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  contentContainer: {
+    paddingBottom: 40,
+  },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  stepContainer: {
-    gap: 8,
+  headerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  logo: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  logoText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1e293b',
+    flexShrink: 1,
+  },
+  headerLink: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '500',
+    flexShrink: 0,
+  },
+  hero: {
+    padding: 20,
+  },
+  heroText: {
+    marginBottom: 24,
+  },
+  tagline: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6366f1',
     marginBottom: 8,
+    letterSpacing: 0.3,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
+  title: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: '#0f172a',
+    marginBottom: 14,
+    lineHeight: 34,
+    flexWrap: 'wrap',
+  },
+  description: {
+    fontSize: 15,
+    color: '#64748b',
+    lineHeight: 22,
+    flexWrap: 'wrap',
+  },
+  exampleCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    padding: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  exampleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  exampleHeaderText: {
+    color: '#ffffff',
+    fontSize: 13,
+    opacity: 0.9,
+    fontWeight: '500',
+  },
+  pulse: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pulseDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#34d399',
+    marginRight: 6,
+  },
+  exampleHeaderSubtext: {
+    color: '#ffffff',
+    fontSize: 13,
+    opacity: 0.9,
+    fontWeight: '500',
+  },
+  exampleContent: {
+    flexDirection: width < 400 ? 'column' : 'row',
+    gap: 12,
+  },
+  exampleLeft: {
+    flex: 1,
+    minWidth: width < 400 ? '100%' : undefined,
+  },
+  exampleImageContainer: {
+    marginBottom: 12,
+  },
+  exampleImage: {
+    height: 140,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exampleImageText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  exampleBadge: {
     position: 'absolute',
+    left: 12,
+    bottom: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  exampleBadgeText: {
+    fontSize: 11,
+    color: '#ffffff',
+    fontWeight: '500',
+  },
+  exampleInfoCard: {
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    borderRadius: 14,
+    padding: 14,
+  },
+  exampleInfoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  exampleInfoTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#312e81',
+  },
+  exampleInfoBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  exampleInfoBadgeText: {
+    fontSize: 10,
+    color: '#312e81',
+    fontWeight: '500',
+  },
+  exampleInfoDesc: {
+    fontSize: 12,
+    color: '#312e81',
+  },
+  exampleRight: {
+    flex: 1,
+    minWidth: width < 400 ? '100%' : undefined,
+  },
+  statRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  statValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  warningBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  warningDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#f59e0b',
+    marginRight: 5,
+  },
+  warningText: {
+    fontSize: 12,
+    color: '#f59e0b',
+    fontWeight: '500',
+  },
+  courseComparison: {
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 8,
+    marginTop: 4,
+  },
+  courseARow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  courseAText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  recommendBadge: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  courseBRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  courseBText: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  compareLink: {
+    fontSize: 11,
+    color: '#6366f1',
+    textDecorationLine: 'underline',
+    fontWeight: '500',
+  },
+  section: {
+    padding: 20,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#0f172a',
+    marginBottom: 20,
+    letterSpacing: -0.3,
+  },
+  entryCards: {
+    gap: 16,
+    flexDirection: 'column',
+  },
+  entryCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  entryCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+    gap: 10,
+  },
+  entryCardTag: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6366f1',
+    marginBottom: 6,
+    letterSpacing: 0.2,
+  },
+  entryCardTagGreen: {
+    color: '#059669',
+  },
+  entryCardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0f172a',
+    marginBottom: 8,
+    letterSpacing: -0.3,
+    flexWrap: 'wrap',
+    flexShrink: 1,
+  },
+  entryCardDesc: {
+    fontSize: 14,
+    color: '#64748b',
+    lineHeight: 20,
+    flexWrap: 'wrap',
+    flexShrink: 1,
+  },
+  entryCardArrow: {
+    fontSize: 24,
+    color: '#cbd5e1',
+    fontWeight: '300',
+  },
+  entryCardTags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  entryTag: {
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+  },
+  entryTagText: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '500',
+  },
+  infoCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 20,
+    gap: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  infoColumn: {
+    gap: 10,
+  },
+  infoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  infoNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  infoNumberText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#6366f1',
+  },
+  infoTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  infoItem: {
+    fontSize: 14,
+    color: '#64748b',
+    lineHeight: 20,
   },
 });

@@ -1,50 +1,157 @@
-# Welcome to your Expo app 👋
+# TripFlow - 여행 플래너 앱
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+React Native + Expo로 만든 사진 기반 여행 플랜 생성 앱입니다.
 
-## Get started
+## 주요 기능
 
-1. Install dependencies
+1. **사진 기반 장소 인식**: 여행 사진을 업로드하면 EXIF 정보로 위치 자동 인식
+2. **코스 조건 입력**: 시간, 교통수단, 카테고리, 혼잡도 기준 설정
+3. **A/B 코스 생성**: 혼잡도와 교통 상황을 반영한 두 가지 대안 제시
+4. **개인 기록 관리**: 사진, 메모, 태그로 나만의 여행 스팟 저장
+5. **타임라인 시각화**: 시간대별 동선과 혼잡도 정보 확인
 
-   ```bash
-   npm install
-   ```
+## 화면 구성
 
-2. Start the app
+### 1. 홈 (Home) - `app/(tabs)/index.tsx`
+- 히어로 섹션 및 예시 카드
+- 진입 방식 선택
+  - 새 플랜 만들기 → 코스 조건 입력
+  - 사진으로 기록 → 장소 인식
+- 필요 정보 안내
 
-   ```bash
-   npx expo start
-   ```
+### 2. 코스 조건 입력 (Course) - `app/course.tsx`
+- 여행 기본 정보: 지역, 목적, 날짜, 시간, 예산
+- 코스 조건: 소요 시간, 이동수단, 카테고리
+- 혼잡도 옵션: 붐비는 곳 피하기/기본/인기 장소 위주
 
-In the output, you'll find options to open the app in a
+### 3. 사진 업로드 (Upload) - `app/upload.tsx`
+- 사진 업로드 영역
+- 업로드된 사진 리스트
+  - 자동 인식 완료
+  - 후보 중 선택 필요
+  - 위치 정보 없음
+- 장소 확정 및 개인 기록 생성
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+### 4. 개인 기록 상세 (Record) - `app/record.tsx`
+- 스팟 요약 (사진, 이름, 주소, 날짜, 태그)
+- 메모 및 지도
+- 관련 여행 플랜 목록
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+### 5. 내 기록 (Records) - `app/records.tsx`
+- 탭 네비게이션
+  - 개인 기록 스팟 리스트
+  - 저장된 여행 플랜 리스트
 
-## Get a fresh project
+### 6. 추천 결과 (Results) - `app/(tabs)/results.tsx`
+- 여행 플랜 요약
+- 지도 + 동선 시각화
+- 타임라인 (A안/B안 토글)
+- 혼잡/교통 경고
+- A/B 비교 카드
 
-When you're ready, run:
+## 설치 및 실행
 
+### 필요 조건
+- Node.js 18 이상
+- npm 또는 yarn
+- Expo CLI
+
+### 설치
 ```bash
-npm run reset-project
+cd openTripPlanner-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### 실행
+```bash
+# 개발 서버 시작
+npm start
 
-## Learn more
+# iOS 시뮬레이터
+npm run ios
 
-To learn more about developing your project with Expo, look at the following resources:
+# Android 에뮬레이터
+npm run android
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+# 웹 브라우저
+npm run web
+```
 
-## Join the community
+## 기술 스택
 
-Join our community of developers creating universal apps.
+- **React Native**: 크로스 플랫폼 모바일 앱 프레임워크
+- **Expo**: React Native 개발 도구 및 플랫폼
+- **Expo Router**: 파일 기반 라우팅
+- **TypeScript**: 타입 안전성
+- **expo-linear-gradient**: 그라데이션 UI 컴포넌트
+- **@expo/vector-icons**: 아이콘 라이브러리
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## 프로젝트 구조
+
+```
+openTripPlanner-project/
+├── app/
+│   ├── (tabs)/              # 탭 네비게이션
+│   │   ├── _layout.tsx      # 탭 레이아웃 (홈, 추천 결과)
+│   │   ├── index.tsx        # 홈 화면
+│   │   └── results.tsx      # 추천 결과 화면
+│   ├── _layout.tsx          # 루트 레이아웃
+│   ├── course.tsx           # 코스 조건 입력
+│   ├── upload.tsx           # 사진 업로드 & 장소 인식
+│   ├── record.tsx           # 개인 기록 상세
+│   ├── records.tsx          # 내 기록 (스팟/플랜 리스트)
+│   └── modal.tsx            # 모달 (예시)
+├── components/              # 재사용 가능한 컴포넌트
+├── constants/               # 상수 및 테마
+├── hooks/                   # 커스텀 훅
+├── package.json
+└── README.md
+```
+
+## 네비게이션 플로우
+
+```
+(tabs)
+├── index (홈) → course (코스 조건) → results (추천 결과)
+│              → upload (사진 업로드) → record (기록 상세)
+│              → records (내 기록)
+└── results (추천 결과)
+```
+
+## 주요 기능 설명
+
+### 1. 사진 기반 장소 인식
+- EXIF 메타데이터에서 위치 정보 자동 추출
+- 위치 정보가 없는 경우 후보 장소 제시 또는 수동 입력
+- 지도에서 직접 핀 지정 가능
+
+### 2. A/B 코스 생성
+- **코스 A (기본 추천)**: 사용자 조건에 최적화된 기본 동선
+- **코스 B (대체 플랜)**: 혼잡/휴무/비효율 구간 발견 시 자동 생성
+- 동일 카테고리의 대체 장소 추천
+- 동선 순서 변경 또는 우회 경로 제안
+
+### 3. 혼잡도 & 교통 반영
+- 실시간 교통 정보 반영 (선택)
+- 혼잡도 지표: 원활(녹색), 다소 혼잡(노란색), 매우 혼잡(빨간색)
+- 타임라인에 구간별 혼잡도 시각화
+
+### 4. 개인 기록 관리
+- 사진, 메모, 태그로 스팟 저장
+- 과거 플랜과 연결하여 히스토리 관리
+- 지도에서 내 스팟 모아보기
+
+## 향후 개발 계획
+
+- [ ] 실제 지도 API 연동 (Google Maps / Kakao Map)
+- [ ] 사진 EXIF 데이터 파싱 라이브러리 연동
+- [ ] 실시간 교통/혼잡도 API 연동
+- [ ] 장소 추천 알고리즘 고도화
+- [ ] 사용자 인증 및 클라우드 데이터 동기화
+- [ ] 플랜 공유 기능 (URL 생성)
+- [ ] 오프라인 모드 지원
+- [ ] 사용자 리뷰 및 평가 기능
+
+## 라이선스
+
+MIT

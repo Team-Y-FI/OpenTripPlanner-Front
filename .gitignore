@@ -41,3 +41,8 @@ app-example
 # generated native folders
 /ios
 /android
+
+.vscode/
+package-lock.json
+OpenTripPlanner-Front/ 
+.gitignore  
