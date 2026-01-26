@@ -2,11 +2,13 @@ import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { usePlaces } from '@/contexts/PlacesContext';
 
 const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { clearPlaces } = usePlaces();
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -33,6 +35,30 @@ export default function HomeScreen() {
             사진 업로드로 장소를 자동 인식하고, 시간·예산·교통수단만 입력하면{'\n'}
             혼잡도와 교통까지 반영한 A/B 여행 코스를 만들어 드려요.
           </Text>
+          
+          {/* CTA 버튼 */}
+          <View style={styles.heroButtons}>
+            <Pressable 
+              style={styles.heroPrimaryButton}
+              onPress={() => {
+                clearPlaces();
+                router.push('/course');
+              }}>
+              <LinearGradient 
+                colors={['#6366f1', '#38bdf8']} 
+                style={styles.heroPrimaryButtonGradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}>
+                <Text style={styles.heroPrimaryButtonText}>새 여행 플랜 만들기</Text>
+              </LinearGradient>
+            </Pressable>
+            
+            <Pressable 
+              style={styles.heroSecondaryButton}
+              onPress={() => router.push('/records')}>
+              <Text style={styles.heroSecondaryButtonText}>내 여행 기록에서 시작</Text>
+            </Pressable>
+          </View>
         </View>
 
         {/* 예시 카드 */}
@@ -107,7 +133,10 @@ export default function HomeScreen() {
 
         <View style={styles.entryCards}>
           {/* 새 플랜 */}
-          <Pressable style={styles.entryCard} onPress={() => router.push('/course')}>
+          <Pressable style={styles.entryCard} onPress={() => {
+            clearPlaces();
+            router.push('/course');
+          }}>
             <View style={styles.entryCardHeader}>
               <View>
                 <Text style={styles.entryCardTag}>새로운 여행 계획</Text>
@@ -290,6 +319,53 @@ const styles = StyleSheet.create({
     color: '#64748b',
     lineHeight: 22,
     flexWrap: 'wrap',
+  },
+  heroButtons: {
+    flexDirection: width < 400 ? 'column' : 'row',
+    gap: 12,
+    marginTop: 24,
+  },
+  heroPrimaryButton: {
+    flex: width < 400 ? 0 : 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#c7d2fe',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  heroPrimaryButtonGradient: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroPrimaryButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  heroSecondaryButton: {
+    flex: width < 400 ? 0 : 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  heroSecondaryButtonText: {
+    color: '#1e293b',
+    fontSize: 15,
+    fontWeight: '600',
   },
   exampleCard: {
     backgroundColor: '#ffffff',

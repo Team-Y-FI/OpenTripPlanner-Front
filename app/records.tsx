@@ -4,11 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { usePlaces } from '@/contexts/PlacesContext';
 
 const { width } = Dimensions.get('window');
 
 export default function RecordsScreen() {
   const router = useRouter();
+  const { clearPlaces } = usePlaces();
   const [activeTab, setActiveTab] = useState('spots');
 
   const spots = [
@@ -42,7 +44,10 @@ export default function RecordsScreen() {
             <Ionicons name="image" size={18} color="#64748b" style={{ marginRight: 6 }} />
             <Text style={styles.headerButtonText}>사진 기록</Text>
           </Pressable>
-          <Pressable style={styles.headerButtonPrimary} onPress={() => router.push('/course')}>
+          <Pressable style={styles.headerButtonPrimary} onPress={() => {
+            clearPlaces();
+            router.push('/course');
+          }}>
             <Ionicons name="add-circle" size={18} color="#ffffff" style={{ marginRight: 6 }} />
             <Text style={styles.headerButtonPrimaryText}>새 플랜</Text>
           </Pressable>

@@ -4,15 +4,73 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { usePlaces } from '@/contexts/PlacesContext';
 
 const { width } = Dimensions.get('window');
 
+interface PhotoData {
+  id: string;
+  filename: string;
+  placeName: string;
+  placeAddress: string;
+  category: string;
+  timestamp: string;
+  status: 'auto' | 'manual' | 'none';
+  selected: boolean;
+}
+
 export default function UploadScreen() {
   const router = useRouter();
+  const { setSelectedPlaces } = usePlaces();
   const [modalVisible, setModalVisible] = useState(false);
   const [placeName, setPlaceName] = useState('');
   const [placeAddress, setPlaceAddress] = useState('');
   const [placeCategory, setPlaceCategory] = useState('');
+  
+  const [photos, setPhotos] = useState<PhotoData[]>([
+    {
+      id: '1',
+      filename: 'IMG_3271.JPG',
+      placeName: '마들렌 카페 홍대점',
+      placeAddress: '홍대입구역 인근 카페 거리',
+      category: '카페',
+      timestamp: '2024.05.03 15:12',
+      status: 'auto',
+      selected: false,
+    },
+    {
+      id: '2',
+      filename: 'IMG_3273.JPG',
+      placeName: '',
+      placeAddress: '',
+      category: '',
+      timestamp: '2024.05.03 16:30',
+      status: 'none',
+      selected: false,
+    },
+  ]);
+
+  const togglePhotoSelection = (id: string) => {
+    setPhotos(prev => prev.map(photo => 
+      photo.id === id ? { ...photo, selected: !photo.selected } : photo
+    ));
+  };
+
+  const handleCreateCourse = () => {
+    const selected = photos
+      .filter(photo => photo.selected && photo.placeName)
+      .map(photo => ({
+        id: photo.id,
+        filename: photo.filename,
+        placeName: photo.placeName,
+        placeAddress: photo.placeAddress,
+        category: photo.category,
+        timestamp: photo.timestamp,
+      }));
+    
+    setSelectedPlaces(selected);
+    router.push('/course');
+  };
 
   const handleSavePlace = () => {
     // 여기서 장소 정보를 저장하는 로직 추가
@@ -74,64 +132,110 @@ export default function UploadScreen() {
       {/* 업로드된 사진 리스트 */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>업로드된 사진 (2)</Text>
-          <Text style={styles.sectionSubtitle}>1장씩 장소를 확인할게요</Text>
+          <Text style={styles.sectionTitle}>업로드된 사진 ({photos.length})</Text>
+          <Text style={styles.sectionSubtitle}>선택한 장소로 코스 생성</Text>
         </View>
 
-        {/* 사진 1 - 자동 인식 완료 */}
-        <View style={[styles.photoCard, styles.photoCardSuccess]}>
-          <View style={styles.photoThumbnail}>
-            <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.photoThumbnailBg}>
-              <Text style={styles.photoThumbnailText}>사진</Text>
-            </LinearGradient>
-          </View>
-          <View style={styles.photoInfo}>
-            <View style={styles.photoHeader}>
-              <Text style={styles.photoName} numberOfLines={1} ellipsizeMode="middle">IMG_3271.JPG</Text>
-              <View style={styles.photoBadgeSuccess}>
-                <Text style={styles.photoBadgeSuccessText}>위치 자동 인식</Text>
+        {photos.map((photo) => (
+          <View 
+            key={photo.id}
+            style={[
+              styles.photoCard,
+              photo.status === 'auto' && styles.photoCardSuccess,
+              photo.status === 'none' && styles.photoCardGray,
+            ]}>
+            <Pressable 
+              style={styles.checkbox}
+              onPress={() => togglePhotoSelection(photo.id)}
+              disabled={!photo.placeName}>
+              <View style={[
+                styles.checkboxBox,
+                photo.selected && styles.checkboxBoxChecked,
+                !photo.placeName && styles.checkboxBoxDisabled,
+              ]}>
+                {photo.selected && (
+                  <Ionicons name="checkmark" size={16} color="#ffffff" />
+                )}
               </View>
-            </View>
-            <Text style={styles.photoDetail}>홍대입구역 인근 카페 거리 · 2024.05.03 15:12</Text>
-            <Text style={styles.photoPlace}>인식된 장소:  마들렌 카페 홍대점</Text>
-          </View>
-        </View>
-
-        {/* 사진 2- 위치 정보 없음 */}
-        <View style={[styles.photoCard, styles.photoCardGray]}>
-          <View style={styles.photoThumbnail}>
-            <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.photoThumbnailBg}>
-              <Text style={styles.photoThumbnailText}>사진</Text>
-            </LinearGradient>
-          </View>
-          <View style={styles.photoInfo}>
-            <View style={styles.photoHeader}>
-              <Text style={styles.photoName} numberOfLines={1} ellipsizeMode="middle">IMG_3273.JPG</Text>
-              <View style={styles.photoBadgeGray}>
-                <Text style={styles.photoBadgeGrayText}>위치 정보 없음</Text>
-              </View>
-            </View>
-            <Text style={styles.photoDetail}> 이 사진은 어디에서 찍으셨나요? 한 번만 여쭤볼게요.</Text>
-            <Pressable onPress={() => setModalVisible(true)}>
-              <Text style={styles.photoLink}>직접 장소 입력하기</Text>
             </Pressable>
+            
+            <View style={styles.photoThumbnail}>
+              <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.photoThumbnailBg}>
+                <Text style={styles.photoThumbnailText}>사진</Text>
+              </LinearGradient>
+            </View>
+            
+            <View style={styles.photoInfo}>
+              <View style={styles.photoHeader}>
+                <Text style={styles.photoName} numberOfLines={1} ellipsizeMode="middle">
+                  {photo.filename}
+                </Text>
+                {photo.status === 'auto' && (
+                  <View style={styles.photoBadgeSuccess}>
+                    <Text style={styles.photoBadgeSuccessText}>위치 자동 인식</Text>
+                  </View>
+                )}
+                {photo.status === 'none' && (
+                  <View style={styles.photoBadgeGray}>
+                    <Text style={styles.photoBadgeGrayText}>위치 정보 없음</Text>
+                  </View>
+                )}
+              </View>
+              
+              {photo.placeName ? (
+                <>
+                  <Text style={styles.photoDetail}>
+                    {photo.placeAddress} · {photo.timestamp}
+                  </Text>
+                  <Text style={styles.photoPlace}>인식된 장소: {photo.placeName}</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.photoDetail}>이 사진은 어디에서 찍으셨나요? 한 번만 여쭤볼게요.</Text>
+                  <Pressable onPress={() => setModalVisible(true)}>
+                    <Text style={styles.photoLink}>직접 장소 입력하기</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
           </View>
-        </View>
+        ))}
       </View>
 
       {/* 하단 액션 */}
       <View style={styles.actionSection}>
-        <Pressable style={styles.actionButton} onPress={() => router.push('/records')}>
-          <Text style={styles.actionButtonText}>먼저 기록만 쌓기</Text>
-        </Pressable>
-        <Pressable style={styles.actionButtonPrimary} onPress={() => router.push('/course')}>
+        <Pressable 
+          style={[
+            styles.actionButtonPrimary,
+            photos.filter(p => p.selected).length === 0 && styles.actionButtonDisabled
+          ]}
+          onPress={handleCreateCourse}
+          disabled={photos.filter(p => p.selected).length === 0}>
           <LinearGradient
-            colors={['#6366f1', '#38bdf8']}
+            colors={photos.filter(p => p.selected).length > 0 
+              ? ['#6366f1', '#38bdf8'] 
+              : ['#cbd5e1', '#cbd5e1']}
             style={styles.actionButtonGradient}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}>
-            <Text style={styles.actionButtonPrimaryText}>이 기록들로 코스 만들기 →</Text>
+            <View style={styles.actionButtonContent}>
+              <View style={styles.actionButtonTextWrapper}>
+                <Text style={styles.actionButtonPrimaryText}>이 기록들로 코스 만들기</Text>
+                {photos.filter(p => p.selected).length > 0 && (
+                  <View style={styles.actionButtonBadge}>
+                    <Text style={styles.actionButtonBadgeText}>
+                      {photos.filter(p => p.selected).length}개 선택
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <Ionicons name="arrow-forward" size={20} color="#ffffff" />
+            </View>
           </LinearGradient>
+        </Pressable>
+        
+        <Pressable style={styles.actionButton} onPress={() => router.push('/records')}>
+          <Text style={styles.actionButtonText}>먼저 기록만 쌓기</Text>
         </Pressable>
       </View>
       </ScrollView>
@@ -424,6 +528,27 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
+  checkbox: {
+    marginRight: 4,
+  },
+  checkboxBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: '#6366f1',
+    borderColor: '#6366f1',
+  },
+  checkboxBoxDisabled: {
+    backgroundColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
+  },
   photoCardSuccess: {
     backgroundColor: '#ffffff',
     borderLeftWidth: 4,
@@ -558,29 +683,24 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   actionSection: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     padding: 20,
     gap: 12,
   },
   actionButton: {
-    flex: 1,
     backgroundColor: '#ffffff',
-    paddingVertical: 16,
-    borderRadius: 16,
+    paddingVertical: 14,
+    borderRadius: 14,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   actionButtonText: {
     fontSize: 14,
-    color: '#475569',
+    color: '#64748b',
     fontWeight: '500',
   },
   actionButtonPrimary: {
-    flex: 1,
     borderRadius: 16,
     overflow: 'hidden',
     shadowColor: '#6366f1',
@@ -589,12 +709,40 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  actionButtonDisabled: {
+    shadowOpacity: 0.1,
+    elevation: 1,
+  },
   actionButtonGradient: {
-    paddingVertical: 16,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+  },
+  actionButtonContent: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  actionButtonTextWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    flex: 1,
   },
   actionButtonPrimaryText: {
-    fontSize: 14,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  actionButtonBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  actionButtonBadgeText: {
+    fontSize: 12,
     fontWeight: '600',
     color: '#ffffff',
   },

@@ -4,11 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { usePlaces } from '@/contexts/PlacesContext';
 
 const { width } = Dimensions.get('window');
 
 export default function CourseScreen() {
   const router = useRouter();
+  const { selectedPlaces } = usePlaces();
   const [duration, setDuration] = useState('');
   const [selectedMove, setSelectedMove] = useState('walk');
   const [selectedCrowd, setSelectedCrowd] = useState('avoid');
@@ -59,9 +61,36 @@ export default function CourseScreen() {
         <Text style={styles.summaryText}>목적·시간·이동수단만 알려주시면 돼요</Text>
       </View>
 
+      {/* 선택된 장소 */}
+      {selectedPlaces.length > 0 && (
+        <View style={styles.section}>
+          <View style={styles.selectedHeader}>
+            <Text style={styles.sectionTitle}>선택된 장소 ({selectedPlaces.length})</Text>
+            <Text style={styles.selectedSubtitle}>이 장소들로 코스를 만들어요</Text>
+          </View>
+          <View style={styles.selectedPlaces}>
+            {selectedPlaces.map((place) => (
+              <View key={place.id} style={styles.selectedPlaceCard}>
+                <View style={styles.selectedPlaceIcon}>
+                  <Ionicons name="location" size={16} color="#6366f1" />
+                </View>
+                <View style={styles.selectedPlaceInfo}>
+                  <Text style={styles.selectedPlaceName}>{place.placeName}</Text>
+                  {place.category && (
+                    <Text style={styles.selectedPlaceCategory}>{place.category}</Text>
+                  )}
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
+
       {/* 여행 기본 정보 */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>1. 여행 기본 정보</Text>
+        <Text style={styles.sectionTitle}>
+          {selectedPlaces.length > 0 ? '2' : '1'}. 여행 기본 정보
+        </Text>
         
         <View style={styles.inputGroup}>
           <Text style={styles.label}>지역 / 출발 기준</Text>
@@ -112,7 +141,9 @@ export default function CourseScreen() {
 
       {/* 코스 조건 */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>2. 코스 조건</Text>
+        <Text style={styles.sectionTitle}>
+          {selectedPlaces.length > 0 ? '3' : '2'}. 코스 조건
+        </Text>
 
         <View style={styles.inputGroup}>
           <Text style={styles.label}>소요 시간</Text>
@@ -310,6 +341,53 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 16,
     letterSpacing: -0.3,
+  },
+  selectedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  selectedSubtitle: {
+    fontSize: 12,
+    color: '#6366f1',
+    fontWeight: '500',
+  },
+  selectedPlaces: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  selectedPlaceCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  selectedPlaceIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedPlaceInfo: {
+    gap: 2,
+  },
+  selectedPlaceName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#312e81',
+  },
+  selectedPlaceCategory: {
+    fontSize: 11,
+    color: '#6366f1',
   },
   inputGroup: {
     marginBottom: 16,
