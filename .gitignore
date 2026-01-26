@@ -44,5 +44,4 @@ app-example
 
 .vscode/
 package-lock.json
-OpenTripPlanner-Front/ 
 .gitignore  

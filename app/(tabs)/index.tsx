@@ -1,14 +1,34 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { usePlaces } from '@/contexts/PlacesContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
   const { clearPlaces } = usePlaces();
+  const { user, logout } = useAuth();
+
+  const handleLogout = () => {
+    Alert.alert(
+      '로그아웃',
+      '정말 로그아웃 하시겠습니까?',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '로그아웃',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+            router.replace('/login');
+          },
+        },
+      ]
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -21,9 +41,20 @@ export default function HomeScreen() {
           </LinearGradient>
           <Text style={styles.headerTitle}>OpenTripPlanner</Text>
         </View>
-        <Pressable onPress={() => router.push('/records')}>
-          <Text style={styles.headerLink}>내 기록</Text>
-        </Pressable>
+        <View style={styles.headerRight}>
+          {user ? (
+            <>
+              <Text style={styles.userName}>{user.name}님</Text>
+              <Pressable onPress={handleLogout}>
+                <Text style={styles.logoutButton}>로그아웃</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable onPress={() => router.push('/login')}>
+              <Text style={styles.loginButton}>로그인</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {/* 히어로 섹션 */}
@@ -289,6 +320,35 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontWeight: '500',
     flexShrink: 0,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  userName: {
+    fontSize: 14,
+    color: '#334155',
+    fontWeight: '600',
+  },
+  loginButton: {
+    fontSize: 14,
+    color: '#6366f1',
+    fontWeight: '700',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#eef2ff',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  logoutButton: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '500',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
   },
   hero: {
     padding: 20,
