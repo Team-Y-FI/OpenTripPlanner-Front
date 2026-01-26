@@ -187,10 +187,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
+    boxShadow: '0 2px 3px rgba(0, 0, 0, 0.05)',
     elevation: 2,
   },
   headerContent: {
