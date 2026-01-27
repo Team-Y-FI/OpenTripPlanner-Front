@@ -8,24 +8,31 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import Toast from 'react-native-toast-message';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, kakaoLoginHandler } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isKakaoLoading, setIsKakaoLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('알림', '이메일과 비밀번호를 입력해주세요.');
+      Toast.show({
+        type: 'error',
+        text1: '입력 오류',
+        text2: '이메일과 비밀번호를 입력해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
       return;
     }
 
@@ -34,9 +41,51 @@ export default function LoginScreen() {
     setIsLoading(false);
 
     if (success) {
-      router.replace('/(tabs)');
+      Toast.show({
+        type: 'success',
+        text1: '로그인 성공!',
+        text2: '환영합니다 🎉',
+        position: 'top',
+        visibilityTime: 2000,
+      });
+      setTimeout(() => {
+        router.replace('/(tabs)');
+      }, 500);
     } else {
-      Alert.alert('로그인 실패', '이메일 또는 비밀번호가 올바르지 않습니다.');
+      Toast.show({
+        type: 'error',
+        text1: '로그인 실패',
+        text2: '이메일 또는 비밀번호가 올바르지 않습니다.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+    }
+  };
+
+  const handleKakaoLogin = async () => {
+    setIsKakaoLoading(true);
+    const success = await kakaoLoginHandler();
+    setIsKakaoLoading(false);
+
+    if (success) {
+      Toast.show({
+        type: 'success',
+        text1: '카카오 로그인 성공!',
+        text2: '환영합니다 🎉',
+        position: 'top',
+        visibilityTime: 2000,
+      });
+      setTimeout(() => {
+        router.replace('/(tabs)');
+      }, 500);
+    } else {
+      Toast.show({
+        type: 'error',
+        text1: '카카오 로그인 실패',
+        text2: '다시 시도해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
     }
   };
 
@@ -114,6 +163,27 @@ export default function LoginScreen() {
                   {isLoading ? '로그인 중...' : '로그인'}
                 </Text>
               </LinearGradient>
+            </TouchableOpacity>
+
+            {/* 소셜 로그인 구분선 */}
+            <View style={styles.dividerContainer}>
+              <View style={styles.divider} />
+              <Text style={styles.dividerText}>또는</Text>
+              <View style={styles.divider} />
+            </View>
+
+            {/* 카카오 로그인 버튼 */}
+            <TouchableOpacity
+              style={styles.kakaoButton}
+              onPress={handleKakaoLogin}
+              disabled={isKakaoLoading}
+            >
+              <View style={styles.kakaoButtonContent}>
+                <Text style={styles.kakaoIcon}>💬</Text>
+                <Text style={styles.kakaoButtonText}>
+                  {isKakaoLoading ? '로그인 중...' : '카카오톡으로 로그인'}
+                </Text>
+              </View>
             </TouchableOpacity>
 
             {/* 회원가입 링크 */}
@@ -247,5 +317,47 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#6366f1',
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 24,
+  },
+  divider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e2e8f0',
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    fontSize: 13,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+  kakaoButton: {
+    backgroundColor: '#FEE500',
+    borderRadius: 14,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  kakaoButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
+  kakaoIcon: {
+    fontSize: 20,
+  },
+  kakaoButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000000',
+    opacity: 0.85,
   },
 });

@@ -1,9 +1,12 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { usePlaces } from '@/contexts/PlacesContext';
 import { useAuth } from '@/contexts/AuthContext';
+import Toast from 'react-native-toast-message';
+import ConfirmModal from '@/components/ConfirmModal';
 
 const { width } = Dimensions.get('window');
 
@@ -11,23 +14,37 @@ export default function HomeScreen() {
   const router = useRouter();
   const { clearPlaces } = usePlaces();
   const { user, logout } = useAuth();
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const handleLogout = () => {
-    Alert.alert(
-      '로그아웃',
-      '정말 로그아웃 하시겠습니까?',
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '로그아웃',
-          style: 'destructive',
-          onPress: async () => {
-            await logout();
-            router.replace('/login');
-          },
-        },
-      ]
-    );
+    setShowLogoutModal(true);
+  };
+
+  const performLogout = async () => {
+    setShowLogoutModal(false);
+    
+    try {
+      await logout();
+      Toast.show({
+        type: 'success',
+        text1: '로그아웃 완료',
+        text2: '다음에 또 만나요! 👋',
+        position: 'top',
+        visibilityTime: 2000,
+      });
+      setTimeout(() => {
+        router.replace('/login');
+      }, 500);
+    } catch (error) {
+      console.error('로그아웃 오류:', error);
+      Toast.show({
+        type: 'error',
+        text1: '오류 발생',
+        text2: '로그아웃 중 오류가 발생했습니다.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+    }
   };
 
   return (
@@ -264,6 +281,18 @@ export default function HomeScreen() {
         </View>
       </View>
       </ScrollView>
+
+      {/* 로그아웃 확인 모달 */}
+      <ConfirmModal
+        visible={showLogoutModal}
+        title="로그아웃"
+        message="정말 로그아웃 하시겠습니까?"
+        confirmText="로그아웃"
+        cancelText="취소"
+        type="warning"
+        onConfirm={performLogout}
+        onCancel={() => setShowLogoutModal(false)}
+      />
     </SafeAreaView>
   );
 }

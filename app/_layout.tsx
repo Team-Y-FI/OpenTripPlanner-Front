@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Platform } from 'react-native';
 import { PlacesProvider } from '@/contexts/PlacesContext';
 import { AuthProvider } from '@/contexts/AuthContext';
+import Toast from 'react-native-toast-message';
 import 'react-native-reanimated';
 
 export default function RootLayout() {
@@ -35,6 +36,7 @@ export default function RootLayout() {
               <Stack.Screen name="records" />
             </Stack>
           </ThemeProvider>
+          <Toast />
         </PlacesProvider>
       </AuthProvider>
     </SafeAreaProvider>
