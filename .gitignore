@@ -44,4 +44,5 @@ app-example
 
 .vscode/
 package-lock.json
-.gitignore  
+.gitignore
+.env
