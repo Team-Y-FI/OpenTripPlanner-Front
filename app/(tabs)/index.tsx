@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,6 +7,8 @@ import { usePlaces } from '@/contexts/PlacesContext';
 import { useAuth } from '@/contexts/AuthContext';
 import Toast from 'react-native-toast-message';
 import ConfirmModal from '@/components/ConfirmModal';
+import FullScreenLoader from '@/components/FullScreenLoader';
+import LoadingSpinner from '@/components/LoadingSpinner';
 
 const { width } = Dimensions.get('window');
 
@@ -15,6 +17,52 @@ export default function HomeScreen() {
   const { clearPlaces } = usePlaces();
   const { user, logout } = useAuth();
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  
+  // 로딩 상태 관리 - 데이터를 불러올 때 사용합니다
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [userPlansCount, setUserPlansCount] = useState(0);
+
+  // 컴포넌트가 처음 로드될 때 데이터를 불러옵니다
+  useEffect(() => {
+    // 화면이 나타날 때 사용자 데이터를 불러오는 함수
+    loadUserData();
+  }, []);
+
+  /**
+   * 사용자 데이터를 불러오는 함수
+   * 실제로는 API를 호출해서 데이터를 가져옵니다
+   */
+  const loadUserData = async () => {
+    // 로딩 시작
+    setIsLoadingData(true);
+    
+    try {
+      // 여기서 실제 API 호출을 합니다
+      // 예시: const response = await api.get('/plans');
+      // 실제로는 아래와 같이 사용합니다:
+      // const response = await api.get('/records/plans');
+      // setUserPlansCount(response.items?.length || 0);
+      
+      // 예시를 위해 1초 후에 데이터를 불러온 것처럼 처리합니다
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // 실제 데이터로 교체하세요
+      setUserPlansCount(0); // 예시: API에서 받은 데이터
+      
+    } catch (error) {
+      console.error('데이터 로딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '데이터 로딩 실패',
+        text2: '다시 시도해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+    } finally {
+      // 로딩 종료 (성공/실패 관계없이 항상 실행됩니다)
+      setIsLoadingData(false);
+    }
+  };
 
   const handleLogout = () => {
     setShowLogoutModal(true);
@@ -292,6 +340,12 @@ export default function HomeScreen() {
         type="warning"
         onConfirm={performLogout}
         onCancel={() => setShowLogoutModal(false)}
+      />
+      
+      {/* 전체 화면 로딩 - 데이터를 불러올 때 표시됩니다 */}
+      <FullScreenLoader 
+        visible={isLoadingData} 
+        message="데이터를 불러오는 중..." 
       />
     </SafeAreaView>
   );

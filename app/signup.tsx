@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import Toast from 'react-native-toast-message';
+import FullScreenLoader from '@/components/FullScreenLoader';
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -269,6 +270,12 @@ export default function SignupScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      
+      {/* 전체 화면 로딩 표시 - 회원가입이나 카카오 로그인 중일 때 */}
+      <FullScreenLoader 
+        visible={isLoading || isKakaoLoading} 
+        message={isLoading ? '회원가입 중...' : '카카오 로그인 중...'} 
+      />
     </SafeAreaView>
   );
 }
