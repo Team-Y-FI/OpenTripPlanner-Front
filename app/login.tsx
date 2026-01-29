@@ -14,18 +14,31 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { useNetwork } from '@/contexts/NetworkContext';
 import Toast from 'react-native-toast-message';
 import FullScreenLoader from '@/components/FullScreenLoader';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, kakaoLoginHandler } = useAuth();
+  const { login, kakaoLoginHandler, isAuthLoading } = useAuth();
+  const { isOnline } = useNetwork();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isKakaoLoading, setIsKakaoLoading] = useState(false);
+  // 어떤 인증 플로우가 동작 중인지 구분하기 위한 상태 (버튼/메시지용)
+  const [activeAuthMode, setActiveAuthMode] = useState<'email' | 'kakao' | null>(null);
 
   const handleLogin = async () => {
+    if (!isOnline) {
+      Toast.show({
+        type: 'error',
+        text1: '네트워크 오류',
+        text2: '오프라인 상태입니다. 인터넷 연결을 확인해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+      return;
+    }
+
     if (!email || !password) {
       Toast.show({
         type: 'error',
@@ -37,9 +50,9 @@ export default function LoginScreen() {
       return;
     }
 
-    setIsLoading(true);
+    setActiveAuthMode('email');
     const success = await login(email, password);
-    setIsLoading(false);
+    setActiveAuthMode(null);
 
     if (success) {
       Toast.show({
@@ -64,9 +77,20 @@ export default function LoginScreen() {
   };
 
   const handleKakaoLogin = async () => {
-    setIsKakaoLoading(true);
+    if (!isOnline) {
+      Toast.show({
+        type: 'error',
+        text1: '네트워크 오류',
+        text2: '오프라인 상태입니다. 인터넷 연결을 확인해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+      return;
+    }
+
+    setActiveAuthMode('kakao');
     const success = await kakaoLoginHandler();
-    setIsKakaoLoading(false);
+    setActiveAuthMode(null);
 
     if (success) {
       Toast.show({
@@ -152,7 +176,7 @@ export default function LoginScreen() {
             <TouchableOpacity
               style={styles.loginButton}
               onPress={handleLogin}
-              disabled={isLoading}
+              disabled={isAuthLoading}
             >
               <LinearGradient
                 colors={['#6366f1', '#0ea5e9']}
@@ -161,7 +185,7 @@ export default function LoginScreen() {
                 style={styles.loginGradient}
               >
                 <Text style={styles.loginButtonText}>
-                  {isLoading ? '로그인 중...' : '로그인'}
+                  {isAuthLoading && activeAuthMode === 'email' ? '로그인 중...' : '로그인'}
                 </Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -177,12 +201,12 @@ export default function LoginScreen() {
             <TouchableOpacity
               style={styles.kakaoButton}
               onPress={handleKakaoLogin}
-              disabled={isKakaoLoading}
+              disabled={isAuthLoading}
             >
               <View style={styles.kakaoButtonContent}>
                 <Text style={styles.kakaoIcon}>💬</Text>
                 <Text style={styles.kakaoButtonText}>
-                  {isKakaoLoading ? '로그인 중...' : '카카오톡으로 로그인'}
+                  {isAuthLoading && activeAuthMode === 'kakao' ? '로그인 중...' : '카카오톡으로 로그인'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -198,10 +222,14 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
       
-      {/* 전체 화면 로딩 표시 - 로그인 중일 때 */}
+      {/* 전체 화면 로딩 표시 - 어떤 인증 플로우든 동작 중일 때 */}
       <FullScreenLoader 
-        visible={isLoading || isKakaoLoading} 
-        message={isLoading ? '로그인 중...' : '카카오 로그인 중...'} 
+        visible={isAuthLoading} 
+        message={
+          activeAuthMode === 'kakao'
+            ? '카카오 로그인 중...'
+            : '로그인 중...'
+        } 
       />
     </SafeAreaView>
   );

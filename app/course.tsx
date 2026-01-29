@@ -10,7 +10,7 @@ const { width } = Dimensions.get('window');
 
 export default function CourseScreen() {
   const router = useRouter();
-  const { selectedPlaces } = usePlaces();
+  const { selectedPlaces, setPlanFormField, resetPlanForm, clearGeneratedPlan } = usePlaces();
   const [duration, setDuration] = useState('');
   const [selectedMove, setSelectedMove] = useState('walk');
   const [selectedCrowd, setSelectedCrowd] = useState('avoid');
@@ -41,6 +41,33 @@ export default function CourseScreen() {
   };
 
   const handleGenerate = () => {
+    // 사용자가 입력한 값들을 전역 플랜 폼에 반영
+    resetPlanForm();
+    clearGeneratedPlan();
+
+    // 소요 시간은 예시로 숫자만 추출해서 durationHours 로 저장
+    const durationHours =
+      typeof duration === 'string'
+        ? parseInt(duration.replace(/[^0-9]/g, ''), 10) || null
+        : null;
+
+    setPlanFormField('durationHours', durationHours);
+
+    // 이동 수단 매핑
+    setPlanFormField(
+      'transport',
+      selectedMove === 'walk' ? 'walk' : selectedMove === 'public' ? 'public' : 'car',
+    );
+
+    // 혼잡도 옵션 매핑
+    setPlanFormField(
+      'crowdMode',
+      selectedCrowd === 'avoid' ? 'quiet' : selectedCrowd === 'ok' ? 'hot' : 'normal',
+    );
+
+    // 카테고리/목적은 문자열 배열 그대로 저장 (백엔드 스키마에 맞게 후처리 가능)
+    setPlanFormField('categories', selectedCategories);
+
     router.push('/(tabs)/results');
   };
 
