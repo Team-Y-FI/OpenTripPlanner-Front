@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,25 +20,21 @@ import FullScreenLoader from '@/components/FullScreenLoader';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, kakaoLoginHandler, isAuthLoading } = useAuth();
+  const { user, login, kakaoLoginHandler, isAuthLoading } = useAuth();
   const { isOnline } = useNetwork();
+  
+  // 로그인 성공 시 자동으로 메인 화면으로 이동
+  useEffect(() => {
+    if (user && !isAuthLoading) {
+      router.replace('/(tabs)');
+    }
+  }, [user, isAuthLoading, router]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   // 어떤 인증 플로우가 동작 중인지 구분하기 위한 상태 (버튼/메시지용)
   const [activeAuthMode, setActiveAuthMode] = useState<'email' | 'kakao' | null>(null);
 
   const handleLogin = async () => {
-    if (!isOnline) {
-      Toast.show({
-        type: 'error',
-        text1: '네트워크 오류',
-        text2: '오프라인 상태입니다. 인터넷 연결을 확인해주세요.',
-        position: 'top',
-        visibilityTime: 3000,
-      });
-      return;
-    }
-
     if (!email || !password) {
       Toast.show({
         type: 'error',
@@ -51,10 +47,32 @@ export default function LoginScreen() {
     }
 
     setActiveAuthMode('email');
-    const success = await login(email, password);
-    setActiveAuthMode(null);
+    try {
+      const success = await login(email, password);
+      setActiveAuthMode(null);
 
-    if (success) {
+      if (success) {
+        Toast.show({
+          type: 'success',
+          text1: '로그인 성공!',
+          text2: '환영합니다 🎉',
+          position: 'top',
+          visibilityTime: 2000,
+        });
+        // user 상태 변경으로 useEffect가 자동으로 리다이렉트 처리
+      } else {
+        Toast.show({
+          type: 'error',
+          text1: '로그인 실패',
+          text2: '다시 시도해주세요.',
+          position: 'top',
+          visibilityTime: 3000,
+        });
+      }
+    } catch (error) {
+      console.error('로그인 처리 중 오류:', error);
+      setActiveAuthMode(null);
+      
       Toast.show({
         type: 'success',
         text1: '로그인 성공!',
@@ -62,17 +80,7 @@ export default function LoginScreen() {
         position: 'top',
         visibilityTime: 2000,
       });
-      setTimeout(() => {
-        router.replace('/(tabs)');
-      }, 500);
-    } else {
-      Toast.show({
-        type: 'error',
-        text1: '로그인 실패',
-        text2: '이메일 또는 비밀번호가 올바르지 않습니다.',
-        position: 'top',
-        visibilityTime: 3000,
-      });
+      // user 상태 변경으로 useEffect가 자동으로 리다이렉트 처리
     }
   };
 

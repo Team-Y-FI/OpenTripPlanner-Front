@@ -34,7 +34,7 @@ export default function ResultsScreen() {
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <LinearGradient colors={['#6366f1', '#38bdf8']} style={styles.logo}>
-            <Text style={styles.logoText}>T</Text>
+            <Text style={styles.logoText}>O</Text>
           </LinearGradient>
           <Text style={styles.headerTitle}>여행 코스 결과</Text>
         </View>

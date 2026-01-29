@@ -1,14 +1,15 @@
 import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { useRouter, useSegments } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 
 export default function Index() {
-  const { user, isLoading } = useAuth();
+  const { user, isBootstrapped } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (isLoading) return;
+    // Auth 부팅이 완료될 때까지 대기
+    if (!isBootstrapped) return;
 
     // 로그인 상태에 따라 리다이렉트
     const timer = setTimeout(() => {
@@ -22,7 +23,7 @@ export default function Index() {
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [user, isLoading, router]);
+  }, [user, isBootstrapped, router]);
 
   return (
     <View style={styles.container}>

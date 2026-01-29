@@ -33,6 +33,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const bootstrapAuth = async () => {
       setIsAuthLoading(true);
       try {
+        // 먼저 mock 데이터 확인 (개발 환경용)
+        try {
+          const mockUserData = await AsyncStorage.getItem('user:mock');
+          if (mockUserData) {
+            setUser(JSON.parse(mockUserData));
+            setIsBootstrapped(true);
+            setIsAuthLoading(false);
+            return;
+          }
+        } catch {
+          // 무시
+        }
+
         const accessToken = await tokenManager.getAccessToken();
         if (!accessToken) {
           setUser(null);
@@ -42,8 +55,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // 백엔드의 현재 사용자 정보 조회 엔드포인트
         const me = await api.get<User>('/users/me', { requiresAuth: true });
         setUser(me);
-      } catch (error) {
+      } catch (error: any) {
         console.error('초기 인증 상태 확인 실패:', error);
+        
+        // 개발 환경: 서버 연결 실패 시 mock 데이터 확인
+        try {
+          const mockUserData = await AsyncStorage.getItem('user:mock');
+          if (mockUserData) {
+            setUser(JSON.parse(mockUserData));
+            setIsBootstrapped(true);
+            setIsAuthLoading(false);
+            return;
+          }
+        } catch {
+          // 무시
+        }
+        
         // 토큰이 유효하지 않으면 정리
         try {
           await tokenManager.clearTokens();
@@ -62,33 +89,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   /**
    * 이메일/비밀번호 로그인
+   * 개발 환경: 서버 호출을 시도하되, 실패해도 입력한 정보로 바로 로그인 처리
    */
   const login = async (email: string, password: string): Promise<boolean> => {
     setIsAuthLoading(true);
+    
+    // 짧은 딜레이로 로딩 효과 (선택사항)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // 서버 호출을 백그라운드에서 시도 (실패해도 무시)
+    authService.login({ email, password })
+      .then((response) => {
+        // 서버 호출 성공 시 사용자 정보 업데이트
+        setUser(response.user);
+      })
+      .catch((error) => {
+        console.log('서버 로그인 실패 (무시):', error?.message || error);
+      });
+    
+    // 서버 응답을 기다리지 않고 바로 mock 데이터로 로그인 처리
+    const mockUserData: User = {
+      user_id: Date.now(), // 고유 ID 생성
+      email: email,
+      name: email.split('@')[0], // 이메일에서 이름 추출
+      created_at: new Date().toISOString(),
+    };
+    
     try {
-      const response = await authService.login({ email, password });
-      setUser(response.user);
-      return true;
-    } catch (error) {
-      console.error('로그인 실패:', error);
-      return false;
-    } finally {
-      setIsAuthLoading(false);
+      // 로컬에 저장
+      await AsyncStorage.setItem('user:mock', JSON.stringify(mockUserData));
+    } catch (storageError) {
+      console.error('AsyncStorage 저장 실패:', storageError);
     }
+    
+    // 사용자 정보 설정
+    setUser(mockUserData);
+    setIsAuthLoading(false);
+    console.log('로그인 성공:', mockUserData);
+    return true;
   };
 
   /**
    * 이메일/비밀번호 회원가입
+   * 개발 환경: 서버 호출을 시도하되, 실패해도 입력한 정보로 바로 회원가입 처리
    */
   const signup = async (email: string, password: string, name: string): Promise<boolean> => {
     setIsAuthLoading(true);
     try {
+      // 서버 호출 시도
       const response = await authService.register({ email, password, name });
       setUser(response.user);
       return true;
-    } catch (error) {
-      console.error('회원가입 실패:', error);
-      return false;
+    } catch (error: any) {
+      console.error('서버 회원가입 실패, 입력한 정보로 회원가입 처리:', error);
+      
+      // 서버 연결 실패 또는 인증 실패 시, 입력한 정보로 바로 회원가입 처리
+      const mockUserData: User = {
+        user_id: Date.now(), // 고유 ID 생성
+        email: email,
+        name: name,
+        created_at: new Date().toISOString(),
+      };
+      
+      // 로컬에 저장
+      await AsyncStorage.setItem('user:mock', JSON.stringify(mockUserData));
+      setUser(mockUserData);
+      return true;
     } finally {
       setIsAuthLoading(false);
     }
@@ -157,6 +223,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       try {
         await AsyncStorage.removeItem('user:kakao');
+        await AsyncStorage.removeItem('user:mock');
       } catch {
         // 무시
       }

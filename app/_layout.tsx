@@ -51,7 +51,10 @@ function AppStack() {
       <>
         <StatusBar style="dark" translucent={false} backgroundColor="#ffffff" />
         {content}
-        <FullScreenLoader visible message="앱을 준비하는 중..." />
+        <FullScreenLoader 
+          visible 
+          message={`${Platform.OS === 'web' ? '웹' : '앱'}을 준비하는 중...`} 
+        />
       </>
     );
   }

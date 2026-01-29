@@ -96,7 +96,7 @@ export default function UploadScreen() {
       {/* 헤더 */}
       <View style={styles.header}>
         <Pressable onPress={handleBack} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={20} color="#64748b" />
+          <Ionicons name="arrow-back" size={24} color="#64748b" />
         </Pressable>
         <View style={styles.headerContent}>
           <LinearGradient colors={['#6366f1', '#38bdf8']} style={styles.logo}>
