@@ -9,12 +9,20 @@ const { width } = Dimensions.get('window');
 export default function RecordScreen() {
   const router = useRouter();
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/records');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton}>
+        <Pressable onPress={handleBack} style={styles.backButton}>
           <Ionicons name="arrow-back" size={20} color="#64748b" />
         </Pressable>
         <View style={styles.headerContent}>

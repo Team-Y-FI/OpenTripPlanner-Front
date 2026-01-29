@@ -26,6 +26,14 @@ export default function SignupScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [isKakaoLoading, setIsKakaoLoading] = useState(false);
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/login');
+    }
+  };
+
   const handleSignup = async () => {
     if (!name || !email || !password || !confirmPassword) {
       Toast.show({
@@ -127,7 +135,7 @@ export default function SignupScreen() {
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backButton}
-              onPress={() => router.back()}
+              onPress={handleBack}
             >
               <Ionicons name="arrow-back" size={24} color="#0f172a" />
             </TouchableOpacity>

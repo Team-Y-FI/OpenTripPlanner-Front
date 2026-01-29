@@ -32,6 +32,14 @@ export default function CourseScreen() {
     );
   };
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
+  };
+
   const handleGenerate = () => {
     router.push('/(tabs)/results');
   };
@@ -41,7 +49,7 @@ export default function CourseScreen() {
       <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton}>
+        <Pressable onPress={handleBack} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#64748b" />
         </Pressable>
         <View style={styles.headerContent}>
@@ -268,7 +276,9 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   backButton: {
-    padding: 4,
+    padding: 8,
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
   },
   headerContent: {
     flexDirection: 'row',

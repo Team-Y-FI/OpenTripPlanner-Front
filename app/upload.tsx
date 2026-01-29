@@ -27,6 +27,14 @@ export default function UploadScreen() {
   const [placeAddress, setPlaceAddress] = useState('');
   const [placeCategory, setPlaceCategory] = useState('');
   
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
+  };
+  
   const [photos, setPhotos] = useState<PhotoData[]>([
     {
       id: '1',
@@ -87,7 +95,7 @@ export default function UploadScreen() {
       <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton}>
+        <Pressable onPress={handleBack} style={styles.backButton}>
           <Ionicons name="arrow-back" size={20} color="#64748b" />
         </Pressable>
         <View style={styles.headerContent}>

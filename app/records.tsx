@@ -13,6 +13,14 @@ export default function RecordsScreen() {
   const { clearPlaces } = usePlaces();
   const [activeTab, setActiveTab] = useState('spots');
 
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
+  };
+
   const spots = [
     { id: '1', name: '마들렌 카페 홍대점', address: '서울 마포구 양화로 00길 12', date: '2024-05-03', tags: ['데이트', '브런치'] },
     { id: '2', name: '성수동 카페 거리', address: '서울 성동구 성수이로 123', date: '2024-04-20', tags: ['혼자', '감성'] },
@@ -28,7 +36,7 @@ export default function RecordsScreen() {
       {/* 헤더 */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
-          <Pressable onPress={() => router.back()} style={styles.backButton}>
+          <Pressable onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#64748b" />
           </Pressable>
           <View style={styles.headerContent}>
