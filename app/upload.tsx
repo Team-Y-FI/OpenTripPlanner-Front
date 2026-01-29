@@ -1,31 +1,56 @@
 import { useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
+import * as ImagePicker from 'expo-image-picker';
+import { api } from '@/services/api';
+import Toast from 'react-native-toast-message';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSession } from '@/contexts/SessionContext';
+import FullScreenLoader from '@/components/FullScreenLoader';
 
 const { width } = Dimensions.get('window');
 
+interface ExifData {
+  lat: number;
+  lng: number;
+  taken_at: string | null;
+}
+
+interface PlaceData {
+  name: string;
+  address: string | null;
+  category: string | null;
+  lat: number;
+  lng: number;
+}
+
 interface PhotoData {
-  id: string;
-  filename: string;
-  placeName: string;
-  placeAddress: string;
-  category: string;
-  timestamp: string;
-  status: 'auto' | 'manual' | 'none';
+  photo_id: string;
+  file_name: string;
+  status: 'recognized' | 'needs_manual';
+  exif: ExifData | null;
+  place: PlaceData | null;
+  thumbnail_url: string | null;
   selected: boolean;
+  editingPlace?: boolean; // 장소 수정 중인지 여부
 }
 
 export default function UploadScreen() {
   const router = useRouter();
   const { setSelectedPlaces } = usePlaces();
+  const { user } = useAuth();
+  const { startGlobalLoading, endGlobalLoading } = useSession();
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingPhotoId, setEditingPhotoId] = useState<string | null>(null);
   const [placeName, setPlaceName] = useState('');
   const [placeAddress, setPlaceAddress] = useState('');
   const [placeCategory, setPlaceCategory] = useState('');
+  const [photos, setPhotos] = useState<PhotoData[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -34,64 +59,237 @@ export default function UploadScreen() {
       router.replace('/(tabs)');
     }
   };
-  
-  const [photos, setPhotos] = useState<PhotoData[]>([
-    {
-      id: '1',
-      filename: 'IMG_3271.JPG',
-      placeName: '마들렌 카페 홍대점',
-      placeAddress: '홍대입구역 인근 카페 거리',
-      category: '카페',
-      timestamp: '2024.05.03 15:12',
-      status: 'auto',
-      selected: false,
-    },
-    {
-      id: '2',
-      filename: 'IMG_3273.JPG',
-      placeName: '',
-      placeAddress: '',
-      category: '',
-      timestamp: '2024.05.03 16:30',
-      status: 'none',
-      selected: false,
-    },
-  ]);
 
-  const togglePhotoSelection = (id: string) => {
-    setPhotos(prev => prev.map(photo => 
-      photo.id === id ? { ...photo, selected: !photo.selected } : photo
-    ));
+  // 이미지 선택 및 업로드
+  const handlePickImages = async () => {
+    // 권한 요청
+    if (Platform.OS !== 'web') {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('권한 필요', '사진을 선택하려면 갤러리 접근 권한이 필요합니다.');
+        return;
+      }
+    }
+
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        quality: 0.8,
+        selectionLimit: 20 - photos.length, // 최대 20장 제한
+      });
+
+      if (!result.canceled && result.assets.length > 0) {
+        await uploadImages(result.assets);
+      }
+    } catch (error) {
+      console.error('이미지 선택 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '이미지 선택 실패',
+        text2: '이미지를 선택하는 중 오류가 발생했습니다.',
+      });
+    }
+  };
+
+  // 이미지 업로드
+  const uploadImages = async (assets: ImagePicker.ImagePickerAsset[]) => {
+    if (!user) {
+      Toast.show({
+        type: 'error',
+        text1: '로그인 필요',
+        text2: '사진을 업로드하려면 로그인이 필요합니다.',
+      });
+      return;
+    }
+
+    setIsUploading(true);
+    startGlobalLoading();
+
+    try {
+      const formData = new FormData();
+      
+      // FormData에 이미지 추가
+      assets.forEach((asset) => {
+        const uri = asset.uri;
+        const filename = uri.split('/').pop() || 'image.jpg';
+        const match = /\.(\w+)$/.exec(filename);
+        const type = match ? `image/${match[1]}` : 'image/jpeg';
+        
+        formData.append('files', {
+          uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+          name: filename,
+          type: type,
+        } as any);
+      });
+
+      // 백엔드 API 호출
+      const response = await api.postFormData<{
+        upload_id: string;
+        limits: { max_photos: number };
+        photos: Array<{
+          photo_id: string;
+          file_name: string;
+          status: 'recognized' | 'needs_manual';
+          exif: ExifData | null;
+          place: PlaceData | null;
+          thumbnail_url: string | null;
+        }>;
+      }>('/uploads/photos', formData, {
+        requiresAuth: true,
+      });
+
+      // 업로드된 사진들을 상태에 추가
+      const newPhotos: PhotoData[] = response.photos.map((photo) => ({
+        ...photo,
+        selected: false,
+      }));
+
+      setPhotos((prev) => [...prev, ...newPhotos]);
+
+      Toast.show({
+        type: 'success',
+        text1: '업로드 완료',
+        text2: `${newPhotos.length}개의 사진이 업로드되었습니다.`,
+      });
+    } catch (error: any) {
+      console.error('이미지 업로드 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '업로드 실패',
+        text2: error.message || '사진을 업로드하는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsUploading(false);
+      endGlobalLoading();
+    }
+  };
+
+  const togglePhotoSelection = (photoId: string) => {
+    setPhotos((prev) =>
+      prev.map((photo) =>
+        photo.photo_id === photoId
+          ? { ...photo, selected: !photo.selected }
+          : photo
+      )
+    );
   };
 
   const handleCreateCourse = () => {
     const selected = photos
-      .filter(photo => photo.selected && photo.placeName)
-      .map(photo => ({
-        id: photo.id,
-        filename: photo.filename,
-        placeName: photo.placeName,
-        placeAddress: photo.placeAddress,
-        category: photo.category,
-        timestamp: photo.timestamp,
+      .filter((photo) => photo.selected && photo.place)
+      .map((photo) => ({
+        id: photo.photo_id,
+        filename: photo.file_name,
+        placeName: photo.place!.name,
+        placeAddress: photo.place!.address || '',
+        category: photo.place!.category || '',
+        timestamp: photo.exif?.taken_at || '',
       }));
-    
+
+    if (selected.length === 0) {
+      Toast.show({
+        type: 'info',
+        text1: '선택된 항목 없음',
+        text2: '코스를 만들려면 장소가 인식된 사진을 선택해주세요.',
+      });
+      return;
+    }
+
     setSelectedPlaces(selected);
     router.push('/course');
   };
 
-  const handleSavePlace = () => {
-    // 여기서 장소 정보를 저장하는 로직 추가
-    console.log('저장:', { placeName, placeAddress, placeCategory });
-    setModalVisible(false);
-    // 입력 필드 초기화
-    setPlaceName('');
-    setPlaceAddress('');
-    setPlaceCategory('');
+  const openPlaceModal = (photoId: string) => {
+    const photo = photos.find((p) => p.photo_id === photoId);
+    if (photo) {
+      setEditingPhotoId(photoId);
+      setPlaceName(photo.place?.name || '');
+      setPlaceAddress(photo.place?.address || '');
+      setPlaceCategory(photo.place?.category || '');
+      setModalVisible(true);
+    }
+  };
+
+  const handleSavePlace = async () => {
+    if (!editingPhotoId || !placeName) {
+      return;
+    }
+
+    startGlobalLoading();
+
+    try {
+      const response = await api.patch<{
+        photo_id: string;
+        status: string;
+        place: PlaceData;
+        thumbnail_url: string | null;
+      }>(
+        `/photos/${editingPhotoId}/place`,
+        {
+          name: placeName,
+          address: placeAddress || null,
+          category: placeCategory || null,
+          lat: photos.find((p) => p.photo_id === editingPhotoId)?.exif?.lat || null,
+          lng: photos.find((p) => p.photo_id === editingPhotoId)?.exif?.lng || null,
+        },
+        { requiresAuth: true }
+      );
+
+      // 사진 정보 업데이트
+      setPhotos((prev) =>
+        prev.map((photo) =>
+          photo.photo_id === editingPhotoId
+            ? {
+                ...photo,
+                place: response.place,
+                status: 'recognized' as const,
+              }
+            : photo
+        )
+      );
+
+      setModalVisible(false);
+      setEditingPhotoId(null);
+      setPlaceName('');
+      setPlaceAddress('');
+      setPlaceCategory('');
+
+      Toast.show({
+        type: 'success',
+        text1: '저장 완료',
+        text2: '장소 정보가 저장되었습니다.',
+      });
+    } catch (error: any) {
+      console.error('장소 정보 저장 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '저장 실패',
+        text2: error.message || '장소 정보를 저장하는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      endGlobalLoading();
+    }
+  };
+
+  const formatDateTime = (dateStr: string | null) => {
+    if (!dateStr) return '';
+    try {
+      const date = new Date(dateStr);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      return `${year}.${month}.${day} ${hours}:${minutes}`;
+    } catch {
+      return dateStr;
+    }
   };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <FullScreenLoader visible={isUploading} message="사진을 업로드하는 중..." />
       <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       {/* 헤더 */}
       <View style={styles.header}>
@@ -130,7 +328,10 @@ export default function UploadScreen() {
             위치 정보가 있는 사진은 자동으로 장소를 인식하고,{'\n'}
             없는 사진은 최소 질문으로 빠르게 확인할게요.
           </Text>
-          <Pressable style={styles.uploadButton}>
+          <Pressable 
+            style={styles.uploadButton}
+            onPress={handlePickImages}
+            disabled={isUploading || photos.length >= 20}>
             <Text style={styles.uploadButtonText}>파일 선택</Text>
           </Pressable>
           <Text style={styles.uploadNote}>최대 20장 · JPEG / PNG · EXIF 위치 정보 자동 분석</Text>
@@ -144,70 +345,104 @@ export default function UploadScreen() {
           <Text style={styles.sectionSubtitle}>선택한 장소로 코스 생성</Text>
         </View>
 
-        {photos.map((photo) => (
-          <View 
-            key={photo.id}
-            style={[
-              styles.photoCard,
-              photo.status === 'auto' && styles.photoCardSuccess,
-              photo.status === 'none' && styles.photoCardGray,
-            ]}>
-            <Pressable 
-              style={styles.checkbox}
-              onPress={() => togglePhotoSelection(photo.id)}
-              disabled={!photo.placeName}>
-              <View style={[
-                styles.checkboxBox,
-                photo.selected && styles.checkboxBoxChecked,
-                !photo.placeName && styles.checkboxBoxDisabled,
+        {photos.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>업로드된 사진이 없습니다</Text>
+            <Text style={styles.emptyStateSubtext}>위의 &quot;파일 선택&quot; 버튼을 눌러 사진을 업로드하세요</Text>
+          </View>
+        ) : (
+          photos.map((photo) => (
+            <View 
+              key={photo.photo_id}
+              style={[
+                styles.photoCard,
+                photo.status === 'recognized' && styles.photoCardSuccess,
+                photo.status === 'needs_manual' && styles.photoCardGray,
               ]}>
-                {photo.selected && (
-                  <Ionicons name="checkmark" size={16} color="#ffffff" />
-                )}
-              </View>
-            </Pressable>
-            
-            <View style={styles.photoThumbnail}>
-              <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.photoThumbnailBg}>
-                <Text style={styles.photoThumbnailText}>사진</Text>
-              </LinearGradient>
-            </View>
-            
-            <View style={styles.photoInfo}>
-              <View style={styles.photoHeader}>
-                <Text style={styles.photoName} numberOfLines={1} ellipsizeMode="middle">
-                  {photo.filename}
-                </Text>
-                {photo.status === 'auto' && (
-                  <View style={styles.photoBadgeSuccess}>
-                    <Text style={styles.photoBadgeSuccessText}>위치 자동 인식</Text>
-                  </View>
-                )}
-                {photo.status === 'none' && (
-                  <View style={styles.photoBadgeGray}>
-                    <Text style={styles.photoBadgeGrayText}>위치 정보 없음</Text>
-                  </View>
+              <Pressable 
+                style={styles.checkbox}
+                onPress={() => togglePhotoSelection(photo.photo_id)}
+                disabled={!photo.place}>
+                <View style={[
+                  styles.checkboxBox,
+                  photo.selected && styles.checkboxBoxChecked,
+                  !photo.place && styles.checkboxBoxDisabled,
+                ]}>
+                  {photo.selected && (
+                    <Ionicons name="checkmark" size={16} color="#ffffff" />
+                  )}
+                </View>
+              </Pressable>
+              
+              <View style={styles.photoThumbnail}>
+                {photo.thumbnail_url ? (
+                  <Image 
+                    source={{ uri: photo.thumbnail_url }} 
+                    style={styles.photoThumbnailImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.photoThumbnailBg}>
+                    <Text style={styles.photoThumbnailText}>사진</Text>
+                  </LinearGradient>
                 )}
               </View>
               
-              {photo.placeName ? (
-                <>
-                  <Text style={styles.photoDetail}>
-                    {photo.placeAddress} · {photo.timestamp}
+              <View style={styles.photoInfo}>
+                <View style={styles.photoHeader}>
+                  <Text style={styles.photoName} numberOfLines={1} ellipsizeMode="middle">
+                    {photo.file_name}
                   </Text>
-                  <Text style={styles.photoPlace}>인식된 장소: {photo.placeName}</Text>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.photoDetail}>이 사진은 어디에서 찍으셨나요? 한 번만 여쭤볼게요.</Text>
-                  <Pressable onPress={() => setModalVisible(true)}>
-                    <Text style={styles.photoLink}>직접 장소 입력하기</Text>
-                  </Pressable>
-                </>
-              )}
+                  {photo.status === 'recognized' && (
+                    <View style={styles.photoBadgeSuccess}>
+                      <Text style={styles.photoBadgeSuccessText}>위치 자동 인식</Text>
+                    </View>
+                  )}
+                  {photo.status === 'needs_manual' && (
+                    <View style={styles.photoBadgeGray}>
+                      <Text style={styles.photoBadgeGrayText}>위치 정보 없음</Text>
+                    </View>
+                  )}
+                </View>
+                
+                {photo.place ? (
+                  <>
+                    <Text style={styles.photoDetail}>
+                      {photo.place.address || ''} {photo.exif?.taken_at ? `· ${formatDateTime(photo.exif.taken_at)}` : ''}
+                    </Text>
+                    <Text style={styles.photoPlace}>인식된 장소: {photo.place.name}</Text>
+                    {photo.place.category && (
+                      <Text style={styles.photoCategory}>카테고리: {photo.place.category}</Text>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {photo.exif ? (
+                      <>
+                        <Text style={styles.photoDetail}>
+                          EXIF 위치 정보: {photo.exif.lat.toFixed(6)}, {photo.exif.lng.toFixed(6)}
+                        </Text>
+                        <Text style={styles.photoDetail}>
+                          촬영 시간: {formatDateTime(photo.exif.taken_at)}
+                        </Text>
+                        <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
+                          <Text style={styles.photoLink}>장소 정보 입력하기</Text>
+                        </Pressable>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={styles.photoDetail}>이 사진은 어디에서 찍으셨나요? 한 번만 여쭤볼게요.</Text>
+                        <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
+                          <Text style={styles.photoLink}>직접 장소 입력하기</Text>
+                        </Pressable>
+                      </>
+                    )}
+                  </>
+                )}
+              </View>
             </View>
-          </View>
-        ))}
+          ))
+        )}
       </View>
 
       {/* 하단 액션 */}
@@ -257,7 +492,13 @@ export default function UploadScreen() {
         <View style={styles.modalContainer}>
           <Pressable
             style={styles.modalOverlay}
-            onPress={() => setModalVisible(false)}
+            onPress={() => {
+              setModalVisible(false);
+              setEditingPhotoId(null);
+              setPlaceName('');
+              setPlaceAddress('');
+              setPlaceCategory('');
+            }}
           />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
@@ -321,7 +562,13 @@ export default function UploadScreen() {
             <View style={styles.modalFooter}>
               <Pressable
                 style={styles.modalCancelButton}
-                onPress={() => setModalVisible(false)}>
+                onPress={() => {
+                  setModalVisible(false);
+                  setEditingPhotoId(null);
+                  setPlaceName('');
+                  setPlaceAddress('');
+                  setPlaceCategory('');
+                }}>
                 <Text style={styles.modalCancelButtonText}>취소</Text>
               </Pressable>
               <Pressable
@@ -567,9 +814,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  photoThumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
   photoThumbnailText: {
     fontSize: 12,
     color: '#ffffff',
+  },
+  photoCategory: {
+    fontSize: 12,
+    color: '#94a3b8',
+    marginTop: 4,
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#94a3b8',
+    textAlign: 'center',
   },
   photoInfo: {
     flex: 1,
