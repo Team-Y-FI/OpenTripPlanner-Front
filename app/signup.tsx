@@ -14,18 +14,20 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { useNetwork } from '@/contexts/NetworkContext';
 import Toast from 'react-native-toast-message';
 import FullScreenLoader from '@/components/FullScreenLoader';
 
 export default function SignupScreen() {
   const router = useRouter();
-  const { signup, kakaoLoginHandler } = useAuth();
+  const { signup, kakaoLoginHandler, isAuthLoading } = useAuth();
+  const { isOnline } = useNetwork();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isKakaoLoading, setIsKakaoLoading] = useState(false);
+  // 어떤 인증 플로우가 동작 중인지 구분하기 위한 상태 (버튼/메시지용)
+  const [activeAuthMode, setActiveAuthMode] = useState<'email' | 'kakao' | null>(null);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -36,6 +38,16 @@ export default function SignupScreen() {
   };
 
   const handleSignup = async () => {
+    if (!isOnline) {
+      Toast.show({
+        type: 'error',
+        text1: '네트워크 오류',
+        text2: '오프라인 상태입니다. 인터넷 연결을 확인해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+      return;
+    }
     if (!name || !email || !password || !confirmPassword) {
       Toast.show({
         type: 'error',
@@ -69,9 +81,9 @@ export default function SignupScreen() {
       return;
     }
 
-    setIsLoading(true);
+    setActiveAuthMode('email');
     const success = await signup(email, password, name);
-    setIsLoading(false);
+    setActiveAuthMode(null);
 
     if (success) {
       Toast.show({
@@ -96,9 +108,20 @@ export default function SignupScreen() {
   };
 
   const handleKakaoLogin = async () => {
-    setIsKakaoLoading(true);
+    if (!isOnline) {
+      Toast.show({
+        type: 'error',
+        text1: '네트워크 오류',
+        text2: '오프라인 상태입니다. 인터넷 연결을 확인해주세요.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+      return;
+    }
+
+    setActiveAuthMode('kakao');
     const success = await kakaoLoginHandler();
-    setIsKakaoLoading(false);
+    setActiveAuthMode(null);
 
     if (success) {
       Toast.show({
@@ -225,7 +248,7 @@ export default function SignupScreen() {
             <TouchableOpacity
               style={styles.signupButton}
               onPress={handleSignup}
-              disabled={isLoading}
+              disabled={isAuthLoading}
             >
               <LinearGradient
                 colors={['#6366f1', '#0ea5e9']}
@@ -234,7 +257,7 @@ export default function SignupScreen() {
                 style={styles.signupGradient}
               >
                 <Text style={styles.signupButtonText}>
-                  {isLoading ? '가입 중...' : '회원가입'}
+                  {isAuthLoading && activeAuthMode === 'email' ? '가입 중...' : '회원가입'}
                 </Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -250,12 +273,12 @@ export default function SignupScreen() {
             <TouchableOpacity
               style={styles.kakaoButton}
               onPress={handleKakaoLogin}
-              disabled={isKakaoLoading}
+              disabled={isAuthLoading}
             >
               <View style={styles.kakaoButtonContent}>
                 <Text style={styles.kakaoIcon}>💬</Text>
                 <Text style={styles.kakaoButtonText}>
-                  {isKakaoLoading ? '로그인 중...' : '카카오톡으로 시작하기'}
+                  {isAuthLoading && activeAuthMode === 'kakao' ? '로그인 중...' : '카카오톡으로 시작하기'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -271,10 +294,14 @@ export default function SignupScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
       
-      {/* 전체 화면 로딩 표시 - 회원가입이나 카카오 로그인 중일 때 */}
+      {/* 전체 화면 로딩 표시 - 어떤 인증 플로우든 동작 중일 때 */}
       <FullScreenLoader 
-        visible={isLoading || isKakaoLoading} 
-        message={isLoading ? '회원가입 중...' : '카카오 로그인 중...'} 
+        visible={isAuthLoading} 
+        message={
+          activeAuthMode === 'kakao'
+            ? '카카오 로그인 중...'
+            : '회원가입 중...'
+        } 
       />
     </SafeAreaView>
   );
