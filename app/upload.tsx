@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -51,7 +51,95 @@ export default function UploadScreen() {
   const [placeCategory, setPlaceCategory] = useState('');
   const [photos, setPhotos] = useState<PhotoData[]>([]);
   const [isUploading, setIsUploading] = useState(false);
-  
+
+  // 테스트용 가데이터
+  useEffect(() => {
+    if (photos.length === 0) {
+      setPhotos([
+        {
+          photo_id: 'test1',
+          file_name: 'IMG_20240115_142356.jpg',
+          status: 'recognized',
+          exif: {
+            lat: 37.5796,
+            lng: 126.9770,
+            taken_at: '2024-01-15T14:23:56',
+          },
+          place: {
+            name: '경복궁',
+            address: '서울특별시 종로구 사직로 161',
+            category: '관광명소',
+            lat: 37.5796,
+            lng: 126.9770,
+          },
+          thumbnail_url: null,
+          selected: false,
+        },
+        {
+          photo_id: 'test2',
+          file_name: 'IMG_20240115_163012.jpg',
+          status: 'recognized',
+          exif: {
+            lat: 37.5826,
+            lng: 126.9831,
+            taken_at: '2024-01-15T16:30:12',
+          },
+          place: {
+            name: '북촌한옥마을',
+            address: '서울특별시 종로구 계동길 37',
+            category: '관광명소',
+            lat: 37.5826,
+            lng: 126.9831,
+          },
+          thumbnail_url: null,
+          selected: false,
+        },
+        {
+          photo_id: 'test3',
+          file_name: 'cafe_photo.jpg',
+          status: 'needs_manual',
+          exif: {
+            lat: 37.5565,
+            lng: 126.9236,
+            taken_at: '2024-01-15T18:45:00',
+          },
+          place: null,
+          thumbnail_url: null,
+          selected: false,
+        },
+        {
+          photo_id: 'test4',
+          file_name: 'sunset_view.png',
+          status: 'needs_manual',
+          exif: null,
+          place: null,
+          thumbnail_url: null,
+          selected: false,
+        },
+        {
+          photo_id: 'test5',
+          file_name: 'IMG_20240116_121500.jpg',
+          status: 'recognized',
+          exif: {
+            lat: 37.5742,
+            lng: 126.9856,
+            taken_at: '2024-01-16T12:15:00',
+          },
+          place: {
+            name: '인사동 쌈지길',
+            address: '서울특별시 종로구 인사동길 44',
+            category: '쇼핑',
+            lat: 37.5742,
+            lng: 126.9856,
+          },
+          thumbnail_url: null,
+          selected: false,
+        },
+      ]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
