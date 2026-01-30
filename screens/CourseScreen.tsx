@@ -1,12 +1,83 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Dimensions } from 'react-native';
+import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Dimensions, Modal, LayoutAnimation, Platform, UIManager, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
 
+// Android에서 LayoutAnimation 활성화
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 const { width } = Dimensions.get('window');
+
+const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '';
+
+interface SearchResult {
+  place_id: string;
+  name: string;
+  formatted_address: string;
+  geometry: { location: { lat: number; lng: number } };
+}
+
+// 고정 일정 한 건 타입 (지도 선택 장소 연동)
+type FixedScheduleItem = {
+  id: string;
+  date: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  placeName?: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+};
+
+// 코스 조건 입력 폼 데이터 (터미널 로직 대응)
+type CourseFormData = {
+  startDate: string;
+  endDate: string;
+  firstDayStartTime: string;
+  lastDayEndTime: string;
+  hasFixedSchedule: boolean;
+  fixedSchedules: FixedScheduleItem[];
+};
+
+const initialFormData: CourseFormData = {
+  startDate: '',
+  endDate: '',
+  firstDayStartTime: '',
+  lastDayEndTime: '',
+  hasFixedSchedule: false,
+  fixedSchedules: [],
+};
+
+// HH:MM 비교: 종료 시간이 시작 시간보다 빠를 수 없음 (end >= start)
+function isTimeEndAfterStart(start: string, end: string): boolean {
+  if (!start || !end) return true;
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+  return eh > sh || (eh === sh && em >= sm);
+}
+
+function parseDate(s: string): Date | null {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// 여행 시작 날짜가 현재 날짜보다 이전인지 확인 (오늘 포함 가능)
+function isStartDateValid(startDate: string): boolean {
+  if (!startDate) return true; // 빈 값은 유효 (다른 검사에서 처리)
+  const start = parseDate(startDate);
+  if (!start) return true;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  return start >= today;
+}
 
 export default function CourseWeb() {
   const router = useRouter();
@@ -17,6 +88,198 @@ export default function CourseWeb() {
   const [selectedCrowd, setSelectedCrowd] = useState('avoid');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
+  const [selectedDistrict, setSelectedDistrict] = useState('');
+  const [districtModalVisible, setDistrictModalVisible] = useState(false);
+  const [formData, setFormData] = useState<CourseFormData>(initialFormData);
+  const [showMapSchedule, setShowMapSchedule] = useState(false);
+
+  // 총 여행 일수 (시작/종료 일자 기반)
+  const totalDays = (() => {
+    const start = parseDate(formData.startDate);
+    const end = parseDate(formData.endDate);
+    if (!start || !end || end < start) return 0;
+    return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  })();
+
+  const setFormField = <K extends keyof CourseFormData>(key: K, value: CourseFormData[K]) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // 고정 일정 추가 모달: 지도에서 장소 선택 후 제목·시간만 입력
+  const [addFixedModalVisible, setAddFixedModalVisible] = useState(false);
+  const [draftPlace, setDraftPlace] = useState<{ lat: number; lng: number; placeName?: string; address?: string } | null>(null);
+  const [draftForm, setDraftForm] = useState<{ date: string; title: string; startTime: string; endTime: string }>({
+    date: '', title: '', startTime: '', endTime: '',
+  });
+  const [modalSearchQuery, setModalSearchQuery] = useState('');
+  const [modalSearchResults, setModalSearchResults] = useState<SearchResult[]>([]);
+  const [modalShowResults, setModalShowResults] = useState(false);
+  const [modalIsSearching, setModalIsSearching] = useState(false);
+  const [reverseGeocoding, setReverseGeocoding] = useState(false);
+  const modalSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const modalMapContainerRef = useRef<HTMLDivElement | null>(null);
+  const modalMapInstance = useRef<any>(null);
+  const modalMarkerRef = useRef<any>(null);
+
+  const openAddFixedModal = () => {
+    setAddFixedModalVisible(true);
+    setDraftPlace(null);
+    setDraftForm({ date: formData.startDate || '', title: '', startTime: '', endTime: '' });
+    setModalSearchQuery('');
+    setModalSearchResults([]);
+    setModalShowResults(false);
+  };
+
+  const closeAddFixedModal = () => {
+    setAddFixedModalVisible(false);
+    setDraftPlace(null);
+    setModalSearchQuery('');
+    setModalSearchResults([]);
+    setModalShowResults(false);
+    if (modalMarkerRef.current) {
+      modalMarkerRef.current.setMap(null);
+      modalMarkerRef.current = null;
+    }
+    if (modalMapInstance.current) {
+      modalMapInstance.current = null;
+    }
+  };
+
+  const reverseGeocode = async (lat: number, lng: number) => {
+    const noAddressText = '주소를 찾을 수 없습니다';
+    if (!GOOGLE_PLACES_API_KEY) {
+      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+      return;
+    }
+    setReverseGeocoding(true);
+    try {
+      const res = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_PLACES_API_KEY}&language=ko`
+      );
+      const data = await res.json();
+      const addr = data.results?.[0]?.formatted_address ?? '';
+      const placeName = addr || noAddressText;
+      setDraftPlace({ lat, lng, placeName, address: addr });
+    } catch {
+      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+    } finally {
+      setReverseGeocoding(false);
+    }
+  };
+
+  const modalSearchPlaces = async (query: string) => {
+    if (!query.trim() || !GOOGLE_PLACES_API_KEY) {
+      setModalSearchResults([]);
+      return;
+    }
+    setModalIsSearching(true);
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&language=ko&key=${GOOGLE_PLACES_API_KEY}`
+      );
+      const data = await response.json();
+      if (data.results) {
+        setModalSearchResults(data.results.slice(0, 5).map((r: any) => ({
+          place_id: r.place_id,
+          name: r.name,
+          formatted_address: r.formatted_address,
+          geometry: { location: { lat: r.geometry.location.lat, lng: r.geometry.location.lng } },
+        })));
+        setModalShowResults(true);
+      }
+    } catch (error) {
+      console.error('장소 검색 오류:', error);
+    } finally {
+      setModalIsSearching(false);
+    }
+  };
+
+  const selectModalSearchResult = (result: SearchResult) => {
+    const { lat, lng } = result.geometry.location;
+    setDraftPlace({
+      lat,
+      lng,
+      placeName: result.name,
+      address: result.formatted_address,
+    });
+    setModalSearchQuery('');
+    setModalSearchResults([]);
+    setModalShowResults(false);
+    const google = (window as any).google;
+    if (google && modalMapInstance.current) {
+      modalMapInstance.current.panTo({ lat, lng });
+      modalMapInstance.current.setZoom(15);
+    }
+  };
+
+  const setDraftFormField = <K extends keyof typeof draftForm>(key: K, value: typeof draftForm[K]) => {
+    setDraftForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const confirmAddFixed = () => {
+    const err = draftForm.startTime && draftForm.endTime
+      ? (isTimeEndAfterStart(draftForm.startTime, draftForm.endTime) ? null : '종료 시간은 시작 시간보다 빠를 수 없습니다.')
+      : null;
+    if (err) return;
+    if (!draftPlace) return;
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setFormData((prev) => ({
+      ...prev,
+      fixedSchedules: [
+        ...prev.fixedSchedules,
+        {
+          id: `fixed-${Date.now()}`,
+          date: draftForm.date,
+          title: draftForm.title,
+          startTime: draftForm.startTime,
+          endTime: draftForm.endTime,
+          placeName: draftPlace.placeName,
+          address: draftPlace.address,
+          lat: draftPlace.lat,
+          lng: draftPlace.lng,
+        },
+      ],
+    }));
+    closeAddFixedModal();
+  };
+
+  const addFixedScheduleItem = () => {
+    openAddFixedModal();
+  };
+
+  const updateFixedScheduleItem = (id: string, field: keyof FixedScheduleItem, value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      fixedSchedules: prev.fixedSchedules.map((item) =>
+        item.id === id ? { ...item, [field]: value } : item
+      ),
+    }));
+  };
+
+  const removeFixedScheduleItem = (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setFormData((prev) => ({ ...prev, fixedSchedules: prev.fixedSchedules.filter((item) => item.id !== id) }));
+  };
+
+  const validateFixedScheduleItem = (item: FixedScheduleItem): string | null => {
+    if (!item.startTime || !item.endTime) return null;
+    if (!isTimeEndAfterStart(item.startTime, item.endTime)) return '종료 시간은 시작 시간보다 빠를 수 없습니다.';
+    return null;
+  };
+
+  const isFixedSchedule = formData.hasFixedSchedule;
+  const setIsFixedSchedule = (v: boolean) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setFormField('hasFixedSchedule', v);
+  };
+
+  const seoulDistricts = [
+    '강남구', '강동구', '강북구', '강서구', '관악구',
+    '광진구', '구로구', '금천구', '노원구', '도봉구',
+    '동대문구', '동작구', '마포구', '서대문구', '서초구',
+    '성동구', '성북구', '송파구', '양천구', '영등포구',
+    '용산구', '은평구', '종로구', '중구', '중랑구',
+  ];
 
   const purposes = ['데이트', '혼자 시간', '친구들과', '가족 나들이', '사진 찍기', '맛집 위주'];
   const categories = ['카페', '맛집', '전시/미술관', '공원/산책', '야경/전망', '쇼핑'];
@@ -256,14 +519,75 @@ export default function CourseWeb() {
   };
 
   useEffect(() => {
-    initWebMap();
+    if (showMapSchedule) {
+      initWebMap();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [showMapSchedule]);
 
   useEffect(() => {
     updateWebMap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPlaces]);
+
+  // 모달 내 장소 검색 debounce
+  useEffect(() => {
+    if (modalSearchTimeoutRef.current) clearTimeout(modalSearchTimeoutRef.current);
+    if (modalSearchQuery.trim()) {
+      modalSearchTimeoutRef.current = setTimeout(() => modalSearchPlaces(modalSearchQuery), 500);
+    } else {
+      setModalSearchResults([]);
+      setModalShowResults(false);
+    }
+    return () => {
+      if (modalSearchTimeoutRef.current) clearTimeout(modalSearchTimeoutRef.current);
+    };
+  }, [modalSearchQuery]);
+
+  // 고정 일정 추가 모달: 지도 초기화 및 클릭 리스너
+  useEffect(() => {
+    if (!addFixedModalVisible || !apiKey) return;
+    let listener: any = null;
+    loadGoogleMapsScript().then(() => {
+      const google = (window as any).google;
+      const container = modalMapContainerRef.current;
+      if (!container || !google) return;
+      const center = draftPlace ? { lat: draftPlace.lat, lng: draftPlace.lng } : { lat: 37.5665, lng: 126.9780 };
+      modalMapInstance.current = new google.maps.Map(container, {
+        center,
+        zoom: draftPlace ? 15 : 11,
+        disableDefaultUI: true,
+      });
+      listener = modalMapInstance.current.addListener('click', (e: any) => {
+        if (e.latLng) reverseGeocode(e.latLng.lat(), e.latLng.lng());
+      });
+    }).catch((e) => console.error('모달 지도 초기화 실패', e));
+    return () => {
+      if (listener && (window as any).google?.maps?.event) {
+        (window as any).google.maps.event.removeListener(listener);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addFixedModalVisible, apiKey]);
+
+  // 모달 지도: draftPlace 변경 시 마커 갱신 및 이동
+  useEffect(() => {
+    const google = (window as any).google;
+    if (!google || !modalMapInstance.current || !addFixedModalVisible) return;
+    if (modalMarkerRef.current) {
+      modalMarkerRef.current.setMap(null);
+      modalMarkerRef.current = null;
+    }
+    if (draftPlace) {
+      modalMarkerRef.current = new google.maps.Marker({
+        position: { lat: draftPlace.lat, lng: draftPlace.lng },
+        map: modalMapInstance.current,
+        title: draftPlace.placeName,
+      });
+      modalMapInstance.current.panTo({ lat: draftPlace.lat, lng: draftPlace.lng });
+      modalMapInstance.current.setZoom(15);
+    }
+  }, [addFixedModalVisible, draftPlace]);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -321,49 +645,194 @@ export default function CourseWeb() {
           <Text style={styles.summaryText}>목적·시간·이동수단만 알려주시면 돼요</Text>
         </View>
 
-        {/* 지도 섹션 */}
-        <View style={styles.mapSection}>
+        {/* 여행 기본 정보 (지도는 showMapSchedule 시 표시) */}
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>1. 여행 기본 정보</Text>
-          <View style={styles.mapContainer}>
-            <div ref={webMapContainerRef as any} style={{ width: '100%', height: 360, borderRadius: 12, overflow: 'hidden', backgroundColor: '#eef2ff' }} />
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
-              <TextInput ref={searchInputRef as any} placeholder="가고 싶은 장소를 검색하세요" placeholderTextColor="#94a3b8" value={query} onChangeText={setQuery} style={styles.searchInput} />
-              {/* <Pressable style={styles.searchButton}><Ionicons name="search" size={18} color="#fff" /></Pressable> */}
-            </View>
-          </View>
-        </View>
-
-        {/* 선택된 장소 */}
-        {selectedPlaces.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.selectedHeader}>
-              <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>선택된 장소 ({selectedPlaces.length})</Text>
-              <Text style={styles.selectedSubtitle}>이 장소들로 코스를 만들어요</Text>
-            </View>
-            <ScrollView
-              style={selectedPlaces.length >= 3 ? styles.placeCardScrollContainer : undefined}
-              contentContainerStyle={styles.placeCardGrid}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator={selectedPlaces.length >= 3}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>지역 선택</Text>
+            <Pressable
+              style={styles.selectBox}
+              onPress={() => setDistrictModalVisible(true)}
             >
-              {selectedPlaces.map((place, i) => (
-                <View key={place.id} style={styles.placeCard}>
-                  <View style={styles.placeIndex}><Text style={styles.placeIndexText}>{i + 1}</Text></View>
-                  <View style={styles.placeInfo}>
-                    <Text style={styles.placeName} numberOfLines={1}>{place.placeName}</Text>
-                    <Text style={styles.placeAddr} numberOfLines={1}>{place.placeAddress || '주소 정보 없음'}</Text>
-                  </View>
-                  <Pressable style={styles.placeRemove} onPress={() => removePlace(place.id)}>
-                    <Ionicons name="trash" size={18} color="#ef4444" />
-                  </Pressable>
-                </View>
-              ))}
-            </ScrollView>
+              <Text style={selectedDistrict ? styles.selectBoxText : styles.selectBoxPlaceholder}>
+                {selectedDistrict || '서울특별시 구를 선택하세요'}
+              </Text>
+              <Ionicons name="chevron-down" size={20} color="#64748b" />
+            </Pressable>
           </View>
-        )}
+          {/* 고정 일정 */} 
+          <Pressable
+            style={styles.fixedScheduleRow}
+            onPress={() => setIsFixedSchedule(!isFixedSchedule)}
+          >
+            <View style={[styles.checkboxBox, isFixedSchedule && styles.checkboxBoxChecked]}>
+              {isFixedSchedule && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+            </View>
+            <Text style={styles.fixedScheduleLabel}>고정 일정이 있나요?</Text>
+          </Pressable>
 
-        {/* 여행 기본 정보 */}
+          {isFixedSchedule && (
+            <View style={styles.fixedScheduleContent}>
+              <Pressable style={styles.addFixedButton} onPress={addFixedScheduleItem}>
+                <Ionicons name="add-circle" size={20} color="#6366f1" />
+                <Text style={styles.addFixedButtonText}>항목 추가</Text>
+              </Pressable>
+              {formData.fixedSchedules.length >= 2 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.fixedScheduleCardScroll}
+                style={styles.fixedScheduleCardScrollContainer}
+              >
+              {formData.fixedSchedules.map((item) => {
+                const err = validateFixedScheduleItem(item);
+                return (
+                  <View key={item.id} style={[styles.fixedScheduleCard, styles.fixedScheduleCardSlide]}>
+                    <View style={styles.fixedScheduleCardHeader}>
+                      <Text style={styles.fixedScheduleCardTitle}>{item.title || '고정 일정'}</Text>
+                      <Pressable style={styles.fixedScheduleRemove} onPress={() => removeFixedScheduleItem(item.id)}>
+                        <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                      </Pressable>
+                    </View>
+                    {(item.placeName || item.address) ? (
+                      <View style={styles.fixedSchedulePlaceBlock}>
+                        <Ionicons name="location" size={16} color="#6366f1" style={styles.fixedSchedulePlaceIcon} />
+                        <View style={styles.fixedSchedulePlaceText}>
+                          {item.placeName ? <Text style={styles.fixedSchedulePlaceName} numberOfLines={1}>{item.placeName}</Text> : null}
+                          <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address || ''}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="2026-01-31"
+                        placeholderTextColor="#94a3b8"
+                        value={item.date}
+                        onChangeText={(v) => updateFixedScheduleItem(item.id, 'date', v)}
+                        // @ts-ignore - React Native Web supports type prop
+                        type="date"
+                      />
+                    </View>
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.label}>일정 제목 (예: 점심 식사)</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="예: 점심 식사"
+                        placeholderTextColor="#94a3b8"
+                        value={item.title}
+                        onChangeText={(v) => updateFixedScheduleItem(item.id, 'title', v)}
+                      />
+                    </View>
+                    <View style={styles.row}>
+                      <View style={styles.inputGroupFlex}>
+                        <Text style={styles.label}>시작 (HH:MM)</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="14:00"
+                          placeholderTextColor="#94a3b8"
+                          value={item.startTime}
+                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
+                          // @ts-ignore - React Native Web supports type prop
+                          type="time"
+                        />
+                      </View>
+                      <View style={styles.inputGroupFlex}>
+                        <Text style={styles.label}>종료 (HH:MM)</Text>
+                        <TextInput
+                          style={[styles.input, err ? styles.inputError : undefined]}
+                          placeholder="16:00"
+                          placeholderTextColor="#94a3b8"
+                          value={item.endTime}
+                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
+                          // @ts-ignore - React Native Web supports type prop
+                          type="time"
+                        />
+                      </View>
+                    </View>
+                    {err ? <Text style={styles.validationError}>{err}</Text> : null}
+                  </View>
+                );
+              })}
+              </ScrollView>
+              ) : (
+              formData.fixedSchedules.map((item) => {
+                const err = validateFixedScheduleItem(item);
+                return (
+                  <View key={item.id} style={[styles.fixedScheduleCard, styles.fixedScheduleCardSingle]}>
+                    <View style={styles.fixedScheduleCardHeader}>
+                      <Text style={styles.fixedScheduleCardTitle}>{item.title || '고정 일정'}</Text>
+                      <Pressable style={styles.fixedScheduleRemove} onPress={() => removeFixedScheduleItem(item.id)}>
+                        <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                      </Pressable>
+                    </View>
+                    {(item.placeName || item.address) ? (
+                      <View style={styles.fixedSchedulePlaceBlock}>
+                        <Ionicons name="location" size={16} color="#6366f1" style={styles.fixedSchedulePlaceIcon} />
+                        <View style={styles.fixedSchedulePlaceText}>
+                          {item.placeName ? <Text style={styles.fixedSchedulePlaceName} numberOfLines={1}>{item.placeName}</Text> : null}
+                          <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address || ''}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="2026-01-31"
+                        placeholderTextColor="#94a3b8"
+                        value={item.date}
+                        onChangeText={(v) => updateFixedScheduleItem(item.id, 'date', v)}
+                        // @ts-ignore - React Native Web supports type prop
+                        type="date"
+                      />
+                    </View>
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.label}>일정 제목 (예: 점심 식사)</Text>
+                      <TextInput
+                        style={styles.input}
+                        placeholder="예: 점심 식사"
+                        placeholderTextColor="#94a3b8"
+                        value={item.title}
+                        onChangeText={(v) => updateFixedScheduleItem(item.id, 'title', v)}
+                      />
+                    </View>
+                    <View style={styles.row}>
+                      <View style={styles.inputGroupFlex}>
+                        <Text style={styles.label}>시작 (HH:MM)</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="14:00"
+                          placeholderTextColor="#94a3b8"
+                          value={item.startTime}
+                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
+                          // @ts-ignore - React Native Web supports type prop
+                          type="time"
+                        />
+                      </View>
+                      <View style={styles.inputGroupFlex}>
+                        <Text style={styles.label}>종료 (HH:MM)</Text>
+                        <TextInput
+                          style={[styles.input, err ? styles.inputError : undefined]}
+                          placeholder="16:00"
+                          placeholderTextColor="#94a3b8"
+                          value={item.endTime}
+                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
+                          // @ts-ignore - React Native Web supports type prop
+                          type="time"
+                        />
+                      </View>
+                    </View>
+                    {err ? <Text style={styles.validationError}>{err}</Text> : null}
+                  </View>
+                );
+              })
+              )}
+            </View>
+          )}
+        </View>
+        
         <View style={styles.section}>
           <View style={styles.inputGroup}>
             <Text style={styles.label}>여행 목적</Text>
@@ -381,14 +850,65 @@ export default function CourseWeb() {
             </View>
           </View>
 
-          <View style={styles.row}>
-            <View style={styles.inputGroupFlex}>
-              <Text style={styles.label}>날짜</Text>
-              <TextInput style={styles.input} placeholder="2024-05-03" placeholderTextColor="#94a3b8" />
+          {/* 날짜 및 시간 (터미널 로직 대응) */}
+          <View style={styles.inputGroup}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>여행 시작 일자 (예: 2026-01-20)</Text>
+              <TextInput
+                style={[styles.input, formData.startDate && !isStartDateValid(formData.startDate) ? styles.inputError : undefined]}
+                placeholder="2026-01-20"
+                placeholderTextColor="#94a3b8"
+                value={formData.startDate}
+                onChangeText={(v) => setFormField('startDate', v)}
+                // @ts-ignore - React Native Web supports type prop
+                type="date"
+              />
+              {formData.startDate && !isStartDateValid(formData.startDate) && (
+                <Text style={styles.validationError}>여행 시작 일자는 오늘 이후여야 합니다.</Text>
+              )}
             </View>
-            <View style={styles.inputGroupFlex}>
-              <Text style={styles.label}>시작 시간</Text>
-              <TextInput style={styles.input} placeholder="14:00" placeholderTextColor="#94a3b8" />
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>여행 종료 일자 (예: 2026-01-25)</Text>
+              <TextInput
+                style={[styles.input, (() => {
+                  const start = parseDate(formData.startDate);
+                  const end = parseDate(formData.endDate);
+                  return start && end && end < start ? styles.inputError : undefined;
+                })()]}
+                placeholder="2026-01-25"
+                placeholderTextColor="#94a3b8"
+                value={formData.endDate}
+                onChangeText={(v) => setFormField('endDate', v)}
+              />
+              {formData.startDate && formData.endDate && totalDays >= 1 && (
+                <Text style={styles.totalDaysText}>총 여행 일수 : {totalDays}일</Text>
+              )}
+            </View>
+            <View style={styles.row}>
+              <View style={styles.inputGroupFlex}>
+                <Text style={styles.label}>여행 첫날 시작 시간 (예: 14:00)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="14:00"
+                  placeholderTextColor="#94a3b8"
+                  value={formData.firstDayStartTime}
+                  onChangeText={(v) => setFormField('firstDayStartTime', v)}
+                  // @ts-ignore - React Native Web supports type prop
+                  type="time"
+                />
+              </View>
+              <View style={styles.inputGroupFlex}>
+                <Text style={styles.label}>여행 마지막 날 종료 시간 (예: 18:00)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="18:00"
+                  placeholderTextColor="#94a3b8"
+                  value={formData.lastDayEndTime}
+                  onChangeText={(v) => setFormField('lastDayEndTime', v)}
+                  // @ts-ignore - React Native Web supports type prop
+                  type="time"
+                />
+              </View>
             </View>
           </View>
 
@@ -424,7 +944,7 @@ export default function CourseWeb() {
           <View style={styles.inputGroup}>
             <Text style={styles.label}>이동수단</Text>
             <View style={styles.buttonRow}>
-              {[{ key: 'walk', label: '도보' }, { key: 'public', label: '대중교통' }, { key: 'car', label: '차량' }].map(option => (
+              {[{ key: 'walkAndPublic', label: '도보 + 대중교통' }, { key: 'car', label: '차량' }].map(option => (
                 <Pressable
                   key={option.key}
                   style={[styles.optionButton, selectedMove === option.key && styles.optionButtonActive]}
@@ -454,48 +974,14 @@ export default function CourseWeb() {
           </View>
         </View>
 
-        {/* 혼잡도 옵션 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>3. 혼잡도 · 교통 옵션</Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>혼잡도 기준</Text>
-            <View style={styles.buttonRow}>
-              {[{ key: 'avoid', label: '붐비는 곳 피하기' }, { key: 'neutral', label: '기본' }, { key: 'ok', label: '인기 장소 위주' }].map(option => (
-                <Pressable
-                  key={option.key}
-                  style={[styles.optionButton, selectedCrowd === option.key && styles.optionButtonActive]}
-                  onPress={() => setSelectedCrowd(option.key)}>
-                  <Text style={[styles.optionButtonText, selectedCrowd === option.key && styles.optionButtonTextActive]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-
-          <View style={styles.infoBox}>
-            <View style={styles.infoBoxHeader}>
-              <Text style={styles.infoBoxTitle}>혼잡/휴무/비효율 구간 발견 시</Text>
-              <View style={styles.infoBoxBadge}>
-                <Text style={styles.infoBoxBadgeText}>B안 자동 생성</Text>
-              </View>
-            </View>
-            <Text style={styles.infoBoxItem}>• 동일 카테고리 · 가까운 거리의 대체 장소 추천</Text>
-            <Text style={styles.infoBoxItem}>• 동선 순서 변경 또는 우회 경로 제안</Text>
-            <Text style={styles.infoBoxItem}>• A안 / B안 이동시간·혼잡·거리 비교 카드 제공</Text>
-          </View>
-        </View>
-
         {/* 생성 버튼 */}
         <View style={styles.generateSection}>
           <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.generateCard}>
             <Text style={styles.generateTitle}>이번 플랜에서 만들어 드릴 것</Text>
             <View style={styles.generateList}>
               <Text style={styles.generateItem}>1  조건에 맞는 추천 스팟 리스트 (카테고리별)</Text>
-              <Text style={styles.generateItem}>2  시작점 기준 최적 동선 코스 A안 · 혼잡/교통 반영</Text>
-              <Text style={styles.generateItem}>3  문제 구간에 대해 대체 플랜 B안 자동 생성</Text>
-              <Text style={styles.generateItem}>4  지도 기반 일정표 + 타임라인 한 화면 제공</Text>
+              <Text style={styles.generateItem}>2  시작점 기준 최적 동선 코스 A안 · 교통 반영</Text>
+              <Text style={styles.generateItem}>3  지도 기반 일정표 + 타임라인 한 화면 제공</Text>
             </View>
             <Pressable style={styles.generateButton} onPress={handleGenerate}>
               <Text style={styles.generateButtonText}>코스 생성하기 →</Text>
@@ -503,6 +989,180 @@ export default function CourseWeb() {
           </LinearGradient>
         </View>
       </ScrollView>
+
+        {/* 지역 선택 모달 */}
+        <Modal
+          visible={districtModalVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setDistrictModalVisible(false)}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setDistrictModalVisible(false)}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>서울특별시 구 선택</Text>
+                <Pressable style={styles.modalCloseButton} onPress={() => setDistrictModalVisible(false)}>
+                  <Ionicons name="close" size={24} color="#64748b" />
+                </Pressable>
+              </View>
+              <ScrollView style={styles.districtList}>
+                {seoulDistricts.map((district) => (
+                  <Pressable
+                    key={district}
+                    style={[styles.districtItem, selectedDistrict === district && styles.districtItemActive]}
+                    onPress={() => {
+                      setSelectedDistrict(district);
+                      setDistrictModalVisible(false);
+                    }}
+                  >
+                    <Text style={[styles.districtItemText, selectedDistrict === district && styles.districtItemTextActive]}>
+                      {district}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          </Pressable>
+        </Modal>
+
+        {/* 고정 일정 추가 모달: 지도에서 장소 선택 후 제목·시간 입력 */}
+        <Modal
+          visible={addFixedModalVisible}
+          animationType="slide"
+          onRequestClose={closeAddFixedModal}
+        >
+          <SafeAreaView style={styles.addFixedModalSafe} edges={['top', 'left', 'right']}>
+            <View style={styles.addFixedModalHeader}>
+              <Text style={styles.addFixedModalTitle}>고정 일정 추가</Text>
+              <Pressable onPress={closeAddFixedModal} style={styles.modalCloseButton}>
+                <Ionicons name="close" size={24} color="#64748b" />
+              </Pressable>
+            </View>
+            <View style={styles.addFixedModalMapSection}>
+              <View style={styles.mapSearchOverlay}>
+                <View style={styles.searchInputWrapper}>
+                  <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="장소를 검색하세요"
+                    placeholderTextColor="#94a3b8"
+                    value={modalSearchQuery}
+                    onChangeText={setModalSearchQuery}
+                  />
+                  {modalIsSearching && (
+                    <ActivityIndicator size="small" color="#6366f1" style={styles.searchLoading} />
+                  )}
+                  {modalSearchQuery.length > 0 && !modalIsSearching && (
+                    <Pressable onPress={() => { setModalSearchQuery(''); setModalSearchResults([]); setModalShowResults(false); }}>
+                      <Ionicons name="close-circle" size={20} color="#94a3b8" />
+                    </Pressable>
+                  )}
+                </View>
+                {modalShowResults && modalSearchResults.length > 0 && (
+                  <View style={styles.searchResultsOverlay}>
+                    {modalSearchResults.map((result) => (
+                      <Pressable
+                        key={result.place_id}
+                        style={styles.searchResultItem}
+                        onPress={() => selectModalSearchResult(result)}
+                      >
+                        <View style={styles.searchResultIcon}>
+                          <Ionicons name="location" size={16} color="#6366f1" />
+                        </View>
+                        <View style={styles.searchResultInfo}>
+                          <Text style={styles.searchResultName} numberOfLines={1}>{result.name}</Text>
+                          <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address}</Text>
+                        </View>
+                        <Ionicons name="pin" size={24} color="#6366f1" />
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+              <div
+                ref={modalMapContainerRef as any}
+                style={{ width: '100%', height: '100%', minHeight: width * 0.3 }}
+              />
+              {reverseGeocoding && (
+                <View style={styles.reverseGeocodeOverlay}>
+                  <ActivityIndicator size="small" color="#6366f1" />
+                  <Text style={styles.reverseGeocodeText}>주소 조회 중...</Text>
+                </View>
+              )}
+            </View>
+            <ScrollView style={styles.addFixedModalFormSection} keyboardShouldPersistTaps="handled">
+              <View style={styles.addFixedFormBlock}>
+                <Text style={styles.label}>선택한 장소</Text>
+                <View style={styles.placeReadOnly}>
+                  <Ionicons name="location" size={18} color="#6366f1" />
+                  <Text style={styles.placeReadOnlyText} numberOfLines={2}>
+                    {draftPlace ? (draftPlace.placeName || draftPlace.address || '주소를 찾을 수 없습니다') : '지도를 클릭하거나 검색해서 장소를 선택하세요'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>일정 제목 (예: 점심 식사)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="예: 점심 식사"
+                  placeholderTextColor="#94a3b8"
+                  value={draftForm.title}
+                  onChangeText={(v) => setDraftFormField('title', v)}
+                />
+              </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="2026-01-31"
+                  placeholderTextColor="#94a3b8"
+                  value={draftForm.date}
+                  onChangeText={(v) => setDraftFormField('date', v)}
+                  // @ts-ignore - React Native Web supports type prop
+                  type="date"
+                />
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputGroupFlex}>
+                  <Text style={styles.label}>시작 시간 (HH:MM)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="12:00"
+                    placeholderTextColor="#94a3b8"
+                    value={draftForm.startTime}
+                    onChangeText={(v) => setDraftFormField('startTime', v)}
+                    // @ts-ignore - React Native Web supports type prop
+                    type="time"
+                  />
+                </View>
+                <View style={styles.inputGroupFlex}>
+                  <Text style={styles.label}>종료 시간 (HH:MM)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="14:00"
+                    placeholderTextColor="#94a3b8"
+                    value={draftForm.endTime}
+                    onChangeText={(v) => setDraftFormField('endTime', v)}
+                    // @ts-ignore - React Native Web supports type prop
+                    type="time"
+                  />
+                </View>
+              </View>
+              <View style={styles.addFixedModalActions}>
+                <Pressable style={styles.addFixedCancelButton} onPress={closeAddFixedModal}>
+                  <Text style={styles.addFixedCancelButtonText}>취소</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.addFixedConfirmButton, !draftPlace && styles.addFixedConfirmButtonDisabled]}
+                  onPress={confirmAddFixed}
+                  disabled={!draftPlace}
+                >
+                  <Text style={styles.addFixedConfirmButtonText}>확인</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
     </SafeAreaView>
   );
 }
@@ -608,17 +1268,14 @@ const styles = StyleSheet.create({
   },
   mapContainer: {
     width: '100%',
-    minHeight: 320,
+    minHeight: 200,
     borderRadius: 16,
     overflow: 'hidden',
     position: 'relative',
+    marginBottom: 16,
   },
   searchBar: {
-    position: 'absolute',
-    top: 12,
-    left: 12,
-    right: 12,
-    zIndex: 20,
+    marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#ffffff',
@@ -666,6 +1323,319 @@ const styles = StyleSheet.create({
     minWidth: 420,
     flexBasis: width < 600 ? '100%' : '48%',
     flexGrow: width < 600 ? 1 : 0,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  placeCardFixed: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#6366f1',
+  },
+  checkbox: {
+    marginRight: 10,
+  },
+  checkboxBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: '#6366f1',
+    borderColor: '#6366f1',
+  },
+  fixedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    gap: 4,
+  },
+  fixedBadgeText: {
+    fontSize: 11,
+    color: '#6366f1',
+    fontWeight: '600',
+  },
+  fixedScheduleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  fixedScheduleLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  fixedScheduleContent: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  totalDaysText: {
+    marginTop: 8,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6366f1',
+  },
+  inputError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+  },
+  addFixedButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#6366f1',
+    borderStyle: 'dashed',
+    backgroundColor: '#faf5ff',
+  },
+  addFixedButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6366f1',
+  },
+  fixedScheduleCardScrollContainer: {
+    flexGrow: 0,
+  },
+  fixedScheduleCardScroll: {
+    flexDirection: 'row',
+    paddingVertical: 8,
+    paddingRight: 16,
+    alignItems: 'flex-start',
+  },
+  fixedScheduleCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  fixedScheduleCardSlide: {
+    width: width * 0.88,
+    marginRight: 12,
+  },
+  fixedScheduleCardSingle: {
+    marginBottom: 12,
+  },
+  fixedScheduleCardInnerScroll: {
+    flex: 1,
+  },
+  fixedScheduleCardInnerContent: {
+    paddingBottom: 20,
+  },
+  fixedScheduleCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  fixedScheduleCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  fixedScheduleRemove: {
+    padding: 6,
+  },
+  validationError: {
+    fontSize: 12,
+    color: '#ef4444',
+    marginTop: 6,
+  },
+  fixedSchedulePlaceBlock: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#eef2ff',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+  },
+  fixedSchedulePlaceIcon: {
+    marginRight: 8,
+    marginTop: 2,
+  },
+  fixedSchedulePlaceText: {
+    flex: 1,
+  },
+  fixedSchedulePlaceName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  fixedSchedulePlaceAddr: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  mapSearchOverlay: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    zIndex: 10,
+  },
+  searchInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  searchLoading: {
+    marginLeft: 8,
+  },
+  searchResultsOverlay: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    marginTop: 8,
+    maxHeight: 220,
+    overflow: 'hidden',
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  searchResultIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  searchResultInfo: {
+    flex: 1,
+  },
+  searchResultName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  searchResultAddress: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  reverseGeocodeOverlay: {
+    position: 'absolute',
+    bottom: 16,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    gap: 8,
+  },
+  reverseGeocodeText: {
+    fontSize: 13,
+    color: '#64748b',
+  },
+  addFixedModalSafe: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  addFixedModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  addFixedModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  addFixedModalMapSection: {
+    height: width * 0.3,
+    position: 'relative',
+  },
+  addFixedModalFormSection: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    padding: 16,
+  },
+  addFixedFormBlock: {
+    marginBottom: 12,
+  },
+  placeReadOnly: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eef2ff',
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+  },
+  placeReadOnlyText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#475569',
+  },
+  addFixedModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+    marginBottom: 24,
+  },
+  addFixedCancelButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+  },
+  addFixedCancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  addFixedConfirmButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#6366f1',
+    alignItems: 'center',
+  },
+  addFixedConfirmButtonDisabled: {
+    backgroundColor: '#94a3b8',
+    opacity: 0.8,
+  },
+  addFixedConfirmButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  fixedScheduleHint: {
+    fontSize: 13,
+    color: '#64748b',
+    marginBottom: 12,
   },
   placeIndex: {
     width: 36,
@@ -856,5 +1826,70 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  selectBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  selectBoxText: {
+    fontSize: 14,
+    color: '#0f172a',
+  },
+  selectBoxPlaceholder: {
+    fontSize: 14,
+    color: '#94a3b8',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '70%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  districtList: {
+    padding: 10,
+  },
+  districtItem: {
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+  },
+  districtItemActive: {
+    backgroundColor: '#eef2ff',
+  },
+  districtItemText: {
+    fontSize: 15,
+    color: '#475569',
+  },
+  districtItemTextActive: {
+    color: '#4f46e5',
+    fontWeight: '600',
   },
 });
