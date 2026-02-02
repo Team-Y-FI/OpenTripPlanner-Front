@@ -1,4 +1,4 @@
-﻿import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { authService, api, tokenManager, type User as AuthUser } from "@/services";
 
 export type User = AuthUser;

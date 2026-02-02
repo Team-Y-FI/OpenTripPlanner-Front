@@ -1,4 +1,4 @@
-﻿import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // .env에서 API URL 가져오기
 const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp";
@@ -159,7 +159,6 @@ async function requestFormData<T>(endpoint: string, formData: FormData, options:
 
     return (await response.json()) as T;
   } catch (error) {
-    console.error("API 요청 실패:", error);
     throw error;
   }
 }

@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, Dimensions, ActivityIndicator, Keyboard, Modal, LayoutAnimation, Platform, UIManager } from 'react-native';
+import Toast from 'react-native-toast-message';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker } from 'react-native-maps';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { planService, CreateCourseRequest, FixedEvent } from '@/services';
 
 // Android에서 LayoutAnimation 활성화
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -83,16 +85,15 @@ function isStartDateValid(startDate: string): boolean {
 
 export default function CourseScreen() {
   const router = useRouter();
-  const { selectedPlaces, setSelectedPlaces, removePlace, setPlanFormField, resetPlanForm, clearGeneratedPlan } = usePlaces();
+  const { selectedPlaces, setSelectedPlaces, removePlace, resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan } = usePlaces();
   const [duration, setDuration] = useState('');
   const [selectedMove, setSelectedMove] = useState('walk');
-  const [selectedCrowd, setSelectedCrowd] = useState('avoid');
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [districtModalVisible, setDistrictModalVisible] = useState(false);
   const [formData, setFormData] = useState<CourseFormData>(initialFormData);
-  const [showMapSchedule, setShowMapSchedule] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   
   // 날짜/시간 picker 상태
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
@@ -326,45 +327,6 @@ export default function CourseScreen() {
     }
   };
 
-  // 테스트용 가데이터
-  useEffect(() => {
-    if (selectedPlaces.length === 0) {
-      setSelectedPlaces([
-        {
-          id: 'test1',
-          filename: '',
-          placeName: '경복궁',
-          placeAddress: '서울특별시 종로구 사직로 161',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5796,
-          lng: 126.9770,
-        },
-        {
-          id: 'test2',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test3',
-          filename: '',
-          placeName: '인사동 쌈지길',
-          placeAddress: '서울특별시 종로구 인사동길 44',
-          category: '쇼핑',
-          timestamp: '',
-          lat: 37.5742,
-          lng: 126.9856,
-        },
-      ]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // 검색어 변경 시 debounce 적용
   useEffect(() => {
     if (searchTimeoutRef.current) {
@@ -464,40 +426,86 @@ export default function CourseScreen() {
     }
   };
 
-  const handleGenerate = () => {
-    // 유효성 검사: 여행 시작 날짜가 현재 날짜보다 이전이면 생성 불가
-    if (formData.startDate && !isStartDateValid(formData.startDate)) {
-      return; // 에러 메시지는 이미 UI에 표시됨
+  const handleGenerate = async () => {
+    // 필수 입력 검증 (웹/앱 공통)
+    if (!selectedDistrict) {
+      Toast.show({ type: 'error', text1: '알림', text2: '지역을 선택해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (!formData.startDate || !formData.endDate) {
+      Toast.show({ type: 'error', text1: '알림', text2: '여행 시작/종료 일자를 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    const start = parseDate(formData.startDate);
+    const end = parseDate(formData.endDate);
+    if (!start || !end) {
+      Toast.show({ type: 'error', text1: '알림', text2: '올바른 날짜 형식(YYYY-MM-DD)으로 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (end < start) {
+      Toast.show({ type: 'error', text1: '알림', text2: '종료 일자는 시작 일자보다 빠를 수 없습니다.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (!formData.firstDayStartTime || !formData.lastDayEndTime) {
+      Toast.show({ type: 'error', text1: '알림', text2: '여행 시작/종료 시간을 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (!isStartDateValid(formData.startDate)) {
+      Toast.show({ type: 'error', text1: '알림', text2: '여행 시작 일자는 오늘 이후여야 합니다.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    for (const item of formData.fixedSchedules) {
+      const err = validateFixedScheduleItem(item);
+      if (err) {
+        Toast.show({ type: 'error', text1: '알림', text2: `${item.title || '고정 일정'}: ${err}`, position: 'top', visibilityTime: 3000 });
+        return;
+      }
     }
 
-    // 사용자가 입력한 값들을 전역 플랜 폼에 반영
-    resetPlanForm();
-    clearGeneratedPlan();
+    // 고정 일정 변환
+    const fixedEvents: FixedEvent[] = formData.fixedSchedules.map((item) => ({
+      date: item.date,
+      title: item.title,
+      start_time: item.startTime,
+      end_time: item.endTime,
+      place_name: item.placeName,
+      address: item.address,
+      lat: item.lat,
+      lng: item.lng,
+    }));
 
-    // 소요 시간은 예시로 숫자만 추출해서 durationHours 로 저장
-    const durationHours =
-      typeof duration === 'string'
-        ? parseInt(duration.replace(/[^0-9]/g, ''), 10) || null
-        : null;
+    // API 요청 데이터 생성
+    const requestData: CreateCourseRequest = {
+      region: selectedDistrict,
+      start_date: formData.startDate,
+      end_date: formData.endDate,
+      first_day_start_time: formData.firstDayStartTime,
+      last_day_end_time: formData.lastDayEndTime,
+      fixed_events: fixedEvents,
+      transport_mode: selectedMove === 'car' ? 'car' : 'walkAndPublic',
+    };
 
-    setPlanFormField('durationHours', durationHours);
+    setIsGenerating(true);
 
-    // 이동 수단 매핑
-    setPlanFormField(
-      'transport',
-      selectedMove === 'walk' ? 'walk' : selectedMove === 'public' ? 'public' : 'car',
-    );
+    try {
+      const response = await planService.createCourse(requestData);
 
-    // 혼잡도 옵션 매핑
-    setPlanFormField(
-      'crowdMode',
-      selectedCrowd === 'avoid' ? 'quiet' : selectedCrowd === 'ok' ? 'hot' : 'normal',
-    );
+      // 플랜 폼 리셋 및 결과 저장
+      resetPlanForm();
+      clearGeneratedPlan();
 
-    // 카테고리/목적은 문자열 배열 그대로 저장 (백엔드 스키마에 맞게 후처리 가능)
-    setPlanFormField('categories', selectedCategories);
+      // 응답 데이터를 context에 저장
+      setLastGeneratedPlan(response);
 
-    router.push('/(tabs)/results');
+      // 결과 페이지로 이동
+      router.push('/(tabs)/results');
+    } catch (error) {
+      console.error('코스 생성 실패:', error);
+      const errorMessage = error instanceof Error ? error.message : '코스 생성에 실패했습니다.';
+      Toast.show({ type: 'error', text1: '오류', text2: errorMessage, position: 'top', visibilityTime: 3000 });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -531,8 +539,9 @@ export default function CourseScreen() {
           <View style={styles.inputGroup}>
             <Text style={styles.label}>지역 선택</Text>
             <Pressable
-              style={styles.selectBox}
-              onPress={() => setDistrictModalVisible(true)}
+              style={[styles.selectBox, isGenerating && styles.inputDisabled]}
+              onPress={() => !isGenerating && setDistrictModalVisible(true)}
+              disabled={isGenerating}
             >
               <Text style={selectedDistrict ? styles.selectBoxText : styles.selectBoxPlaceholder}>
                 {selectedDistrict || '서울특별시 구를 선택하세요'}
@@ -541,7 +550,7 @@ export default function CourseScreen() {
             </Pressable>
           </View>
           {/* 고정 일정 */}
-          <Pressable style={styles.fixedScheduleRow} onPress={() => setIsFixedSchedule(!isFixedSchedule)}>
+          <Pressable style={[styles.fixedScheduleRow, isGenerating && styles.inputDisabled]} onPress={() => !isGenerating && setIsFixedSchedule(!isFixedSchedule)} disabled={isGenerating}>
             <View style={[styles.checkboxBox, isFixedSchedule && styles.checkboxBoxChecked]}>
               {isFixedSchedule && <Ionicons name="checkmark" size={14} color="#ffffff" />}
             </View>
@@ -549,7 +558,7 @@ export default function CourseScreen() {
           </Pressable>
           {isFixedSchedule && (
             <View style={styles.fixedScheduleContent}>
-              <Pressable style={styles.addFixedButton} onPress={addFixedScheduleItem}>
+              <Pressable style={[styles.addFixedButton, isGenerating && styles.inputDisabled]} onPress={() => !isGenerating && addFixedScheduleItem()} disabled={isGenerating}>
                 <Ionicons name="add-circle" size={20} color="#6366f1" />
                 <Text style={styles.addFixedButtonText}>항목 추가</Text>
               </Pressable>
@@ -566,7 +575,7 @@ export default function CourseScreen() {
                   <View key={item.id} style={[styles.fixedScheduleCard, styles.fixedScheduleCardSlide]}>
                     <View style={styles.fixedScheduleCardHeader}>
                       <Text style={styles.fixedScheduleCardTitle}>{item.title || '고정 일정'}</Text>
-                      <Pressable style={styles.fixedScheduleRemove} onPress={() => removeFixedScheduleItem(item.id)}>
+                      <Pressable style={styles.fixedScheduleRemove} onPress={() => !isGenerating && removeFixedScheduleItem(item.id)} disabled={isGenerating}>
                         <Ionicons name="trash-outline" size={18} color="#ef4444" />
                       </Pressable>
                     </View>
@@ -575,13 +584,15 @@ export default function CourseScreen() {
                         <Ionicons name="location" size={16} color="#6366f1" style={styles.fixedSchedulePlaceIcon} />
                         <View style={styles.fixedSchedulePlaceText}>
                           {item.placeName ? <Text style={styles.fixedSchedulePlaceName} numberOfLines={1}>{item.placeName}</Text> : null}
-                          <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address || ''}</Text>
+                          {(item.address && String(item.address).trim()) ? (
+                            <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address}</Text>
+                          ) : null}
                         </View>
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
                       <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
-                      <Pressable onPress={() => setShowFixedDatePicker(item.id)}>
+                      <Pressable onPress={() => !isGenerating && setShowFixedDatePicker(item.id)} disabled={isGenerating}>
                         <TextInput
                           style={styles.input}
                           placeholder="2026-01-31"
@@ -615,12 +626,13 @@ export default function CourseScreen() {
                         placeholderTextColor="#94a3b8"
                         value={item.title}
                         onChangeText={(v) => updateFixedScheduleItem(item.id, 'title', v)}
+                        editable={!isGenerating}
                       />
                     </View>
                     <View style={styles.row}>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>시작 (HH:MM)</Text>
-                        <Pressable onPress={() => setShowFixedStartTimePicker(item.id)}>
+                        <Pressable onPress={() => !isGenerating && setShowFixedStartTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={styles.input}
                             placeholder="14:00"
@@ -653,7 +665,7 @@ export default function CourseScreen() {
                       </View>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>종료 (HH:MM)</Text>
-                        <Pressable onPress={() => setShowFixedEndTimePicker(item.id)}>
+                        <Pressable onPress={() => !isGenerating && setShowFixedEndTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={[styles.input, err ? styles.inputError : undefined]}
                             placeholder="16:00"
@@ -697,7 +709,7 @@ export default function CourseScreen() {
                   <View key={item.id} style={[styles.fixedScheduleCard, styles.fixedScheduleCardSingle]}>
                     <View style={styles.fixedScheduleCardHeader}>
                       <Text style={styles.fixedScheduleCardTitle}>{item.title || '고정 일정'}</Text>
-                      <Pressable style={styles.fixedScheduleRemove} onPress={() => removeFixedScheduleItem(item.id)}>
+                      <Pressable style={styles.fixedScheduleRemove} onPress={() => !isGenerating && removeFixedScheduleItem(item.id)} disabled={isGenerating}>
                         <Ionicons name="trash-outline" size={18} color="#ef4444" />
                       </Pressable>
                     </View>
@@ -706,13 +718,15 @@ export default function CourseScreen() {
                         <Ionicons name="location" size={16} color="#6366f1" style={styles.fixedSchedulePlaceIcon} />
                         <View style={styles.fixedSchedulePlaceText}>
                           {item.placeName ? <Text style={styles.fixedSchedulePlaceName} numberOfLines={1}>{item.placeName}</Text> : null}
-                          <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address || ''}</Text>
+                          {(item.address && String(item.address).trim()) ? (
+                            <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address}</Text>
+                          ) : null}
                         </View>
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
                       <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
-                      <Pressable onPress={() => setShowFixedDatePicker(item.id)}>
+                      <Pressable onPress={() => !isGenerating && setShowFixedDatePicker(item.id)} disabled={isGenerating}>
                         <TextInput
                           style={styles.input}
                           placeholder="2026-01-31"
@@ -746,12 +760,13 @@ export default function CourseScreen() {
                         placeholderTextColor="#94a3b8"
                         value={item.title}
                         onChangeText={(v) => updateFixedScheduleItem(item.id, 'title', v)}
+                        editable={!isGenerating}
                       />
                     </View>
                     <View style={styles.row}>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>시작 (HH:MM)</Text>
-                        <Pressable onPress={() => setShowFixedStartTimePicker(item.id)}>
+                        <Pressable onPress={() => !isGenerating && setShowFixedStartTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={styles.input}
                             placeholder="14:00"
@@ -784,7 +799,7 @@ export default function CourseScreen() {
                       </View>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>종료 (HH:MM)</Text>
-                        <Pressable onPress={() => setShowFixedEndTimePicker(item.id)}>
+                        <Pressable onPress={() => !isGenerating && setShowFixedEndTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={[styles.input, err ? styles.inputError : undefined]}
                             placeholder="16:00"
@@ -826,7 +841,7 @@ export default function CourseScreen() {
         </View>
 
         {/* 선택된 장소 (지도에서 선택한 장소) */}
-        {showMapSchedule && selectedPlaces.length > 0 && (
+        {selectedPlaces.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>선택된 장소 ({selectedPlaces.length})</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.placeCardScroll}>
@@ -853,8 +868,9 @@ export default function CourseScreen() {
               {purposes.map(purpose => (
                 <Pressable
                   key={purpose}
-                  style={[styles.pill, selectedPurposes.includes(purpose) && styles.pillActive]}
-                  onPress={() => togglePurpose(purpose)}>
+                  style={[styles.pill, selectedPurposes.includes(purpose) && styles.pillActive, isGenerating && styles.inputDisabled]}
+                  onPress={() => !isGenerating && togglePurpose(purpose)}
+                  disabled={isGenerating}>
                   <Text style={[styles.pillText, selectedPurposes.includes(purpose) && styles.pillTextActive]}>
                     {purpose}
                   </Text>
@@ -866,7 +882,7 @@ export default function CourseScreen() {
           <View style={styles.row}>
             <View style={styles.inputGroupFlex}>
               <Text style={styles.label}>여행 시작 일자 (예: 2026-01-20)</Text>
-              <Pressable onPress={() => setShowStartDatePicker(true)}>
+              <Pressable onPress={() => !isGenerating && setShowStartDatePicker(true)} disabled={isGenerating}>
                 <TextInput
                   style={[styles.input, formData.startDate && !isStartDateValid(formData.startDate) ? styles.inputError : undefined]}
                   placeholder="2026-01-20"
@@ -897,7 +913,7 @@ export default function CourseScreen() {
             </View>
             <View style={styles.inputGroupFlex}>
               <Text style={styles.label}>여행 종료 일자 (예: 2026-01-25)</Text>
-              <Pressable onPress={() => setShowEndDatePicker(true)}>
+              <Pressable onPress={() => !isGenerating && setShowEndDatePicker(true)} disabled={isGenerating}>
                 <TextInput
                   style={[styles.input, (() => {
                     const start = parseDate(formData.startDate);
@@ -931,7 +947,7 @@ export default function CourseScreen() {
             <View style={styles.row}>
               <View style={styles.inputGroupFlex}>
                 <Text style={styles.label}>여행 첫날 시작 시간 (예: 14:00)</Text>
-                <Pressable onPress={() => setShowFirstDayStartTimePicker(true)}>
+                <Pressable onPress={() => !isGenerating && setShowFirstDayStartTimePicker(true)} disabled={isGenerating}>
                   <TextInput
                     style={styles.input}
                     placeholder="14:00"
@@ -964,7 +980,7 @@ export default function CourseScreen() {
               </View>
               <View style={styles.inputGroupFlex}>
                 <Text style={styles.label}>여행 마지막 날 종료 시간 (예: 18:00)</Text>
-                <Pressable onPress={() => setShowLastDayEndTimePicker(true)}>
+                <Pressable onPress={() => !isGenerating && setShowLastDayEndTimePicker(true)} disabled={isGenerating}>
                   <TextInput
                     style={styles.input}
                     placeholder="18:00"
@@ -1003,6 +1019,7 @@ export default function CourseScreen() {
                 placeholder="예: 30000원"
                 placeholderTextColor="#94a3b8"
                 keyboardType="numeric"
+                editable={!isGenerating}
               />
             </View>
           </View>
@@ -1022,6 +1039,7 @@ export default function CourseScreen() {
               placeholderTextColor="#94a3b8"
               value={duration}
               onChangeText={setDuration}
+              editable={!isGenerating}
             />
             <Text style={styles.inputHint}>숫자 + 시간 단위 또는 표현을 자유롭게 입력하세요</Text>
           </View>
@@ -1032,8 +1050,9 @@ export default function CourseScreen() {
               {[{ key: 'walkAndPublic', label: '도보 + 대중교통' }, { key: 'car', label: '차량' }].map(option => (
                 <Pressable
                   key={option.key}
-                  style={[styles.optionButton, selectedMove === option.key && styles.optionButtonActive]}
-                  onPress={() => setSelectedMove(option.key)}>
+                  style={[styles.optionButton, selectedMove === option.key && styles.optionButtonActive, isGenerating && styles.inputDisabled]}
+                  onPress={() => !isGenerating && setSelectedMove(option.key)}
+                  disabled={isGenerating}>
                   <Text style={[styles.optionButtonText, selectedMove === option.key && styles.optionButtonTextActive]}>
                     {option.label}
                   </Text>
@@ -1048,8 +1067,9 @@ export default function CourseScreen() {
               {categories.map(category => (
                 <Pressable
                   key={category}
-                  style={[styles.pill, selectedCategories.includes(category) && styles.pillActive]}
-                  onPress={() => toggleCategory(category)}>
+                  style={[styles.pill, selectedCategories.includes(category) && styles.pillActive, isGenerating && styles.inputDisabled]}
+                  onPress={() => !isGenerating && toggleCategory(category)}
+                  disabled={isGenerating}>
                   <Text style={[styles.pillText, selectedCategories.includes(category) && styles.pillTextActive]}>
                     {category}
                   </Text>
@@ -1068,8 +1088,19 @@ export default function CourseScreen() {
               <Text style={styles.generateItem}>2  시작점 기준 최적 동선 코스 A안 · 혼잡/교통 반영</Text>
               <Text style={styles.generateItem}>3  지도 기반 일정표 + 타임라인 한 화면 제공</Text>
             </View>
-            <Pressable style={styles.generateButton} onPress={handleGenerate}>
-              <Text style={styles.generateButtonText}>코스 생성하기 →</Text>
+            <Pressable
+              style={[styles.generateButton, isGenerating && styles.generateButtonDisabled]}
+              onPress={handleGenerate}
+              disabled={isGenerating}
+            >
+              {isGenerating ? (
+                <View style={styles.generateButtonLoading}>
+                  <ActivityIndicator size="small" color="#0f172a" />
+                  <Text style={styles.generateButtonText}>생성 중...</Text>
+                </View>
+              ) : (
+                <Text style={styles.generateButtonText}>코스 생성하기 →</Text>
+              )}
             </Pressable>
           </LinearGradient>
         </View>
@@ -1457,6 +1488,9 @@ const styles = StyleSheet.create({
     borderColor: '#ef4444',
     borderWidth: 1.5,
   },
+  inputDisabled: {
+    opacity: 0.6,
+  },
   addFixedButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1734,6 +1768,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  generateButtonDisabled: {
+    opacity: 0.7,
+  },
+  generateButtonLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   mapSection: {
     backgroundColor: '#ffffff',
