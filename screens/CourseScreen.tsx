@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, Dimensions, Modal, LayoutAnimation, Platform, UIManager, ActivityIndicator } from 'react-native';
+import Toast from 'react-native-toast-message';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
+import { planService, CreateCourseRequest, FixedEvent } from '@/services';
 
 // Android에서 LayoutAnimation 활성화
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -68,6 +70,73 @@ function parseDate(s: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// react-native-web TextInput는 type prop을 전달하지 않아 브라우저 피커 미동작 → 웹용 HTML input 사용
+const webInputBaseStyle: React.CSSProperties = {
+  width: '100%',
+  backgroundColor: '#ffffff',
+  border: '1px solid #e2e8f0',
+  borderRadius: 14,
+  padding: '12px 14px',
+  fontSize: 14,
+  color: '#0f172a',
+};
+
+function WebDateInput({
+  value,
+  onChange,
+  disabled,
+  hasError,
+  ...rest
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  hasError?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type="date"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      style={{
+        ...webInputBaseStyle,
+        ...(hasError ? { border: '2px solid #ef4444' } : {}),
+      }}
+      {...rest}
+    />
+  );
+}
+
+function WebTimeInput({
+  value,
+  onChange,
+  disabled,
+  hasError,
+  ...rest
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  hasError?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type="time"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      style={{
+        ...webInputBaseStyle,
+        ...(hasError ? { border: '2px solid #ef4444' } : {}),
+      }}
+      {...rest}
+    />
+  );
+}
+
 // 여행 시작 날짜가 현재 날짜보다 이전인지 확인 (오늘 포함 가능)
 function isStartDateValid(startDate: string): boolean {
   if (!startDate) return true; // 빈 값은 유효 (다른 검사에서 처리)
@@ -81,17 +150,15 @@ function isStartDateValid(startDate: string): boolean {
 
 export default function CourseWeb() {
   const router = useRouter();
-  const { selectedPlaces, setSelectedPlaces, removePlace, setPlanFormField, resetPlanForm, clearGeneratedPlan } = usePlaces();
-  const [query, setQuery] = useState('');
+  const { resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan } = usePlaces();
   const [duration, setDuration] = useState('');
   const [selectedMove, setSelectedMove] = useState('walk');
-  const [selectedCrowd, setSelectedCrowd] = useState('avoid');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [districtModalVisible, setDistrictModalVisible] = useState(false);
   const [formData, setFormData] = useState<CourseFormData>(initialFormData);
-  const [showMapSchedule, setShowMapSchedule] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // 총 여행 일수 (시작/종료 일자 기반)
   const totalDays = (() => {
@@ -296,111 +363,7 @@ export default function CourseWeb() {
     );
   };
 
-  const webMapContainerRef = useRef<HTMLDivElement | null>(null);
-  const webMapInstance = useRef<any>(null);
-  const webMarkers = useRef<any[]>([]);
-  const webPolyline = useRef<any>(null);
-  const searchInputRef = useRef<any>(null);
   const apiKey = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '';
-
-  // 테스트용 가데이터
-  useEffect(() => {
-    if (selectedPlaces.length === 0) {
-      setSelectedPlaces([
-        {
-          id: 'test1',
-          filename: '',
-          placeName: '경복궁',
-          placeAddress: '서울특별시 종로구 사직로 161',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5796,
-          lng: 126.9770,
-        },
-        {
-          id: 'test2',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test3',
-          filename: '',
-          placeName: '인사동 쌈지길',
-          placeAddress: '서울특별시 종로구 인사동길 44',
-          category: '쇼핑',
-          timestamp: '',
-          lat: 37.5742,
-          lng: 126.9856,
-        },
-        {
-          id: 'test26',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test25',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test24',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test23',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test22',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-        {
-          id: 'test21',
-          filename: '',
-          placeName: '북촌한옥마을',
-          placeAddress: '서울특별시 종로구 계동길 37',
-          category: '관광명소',
-          timestamp: '',
-          lat: 37.5826,
-          lng: 126.9831,
-        },
-      ]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const loadGoogleMapsScript = () =>
     new Promise<void>((resolve, reject) => {
@@ -425,110 +388,6 @@ export default function CourseWeb() {
       script.onerror = (e) => reject(e);
       document.head.appendChild(script);
     });
-
-  const addPlaceToPlan = (place: any) => {
-    const id = place.id || `${Date.now()}`;
-    const p = {
-      id,
-      filename: '',
-      placeName: place.placeName || place.name || place.description,
-      placeAddress: place.placeAddress || place.formatted_address || '',
-      category: place.category || '',
-      timestamp: place.timestamp || '',
-      lat: place.lat,
-      lng: place.lng,
-    };
-    if (!selectedPlaces.find((s) => s.id === p.id)) {
-      setSelectedPlaces([...selectedPlaces, p]);
-    }
-  };
-
-  const initWebMap = async () => {
-    if (!apiKey) return;
-    try {
-      await loadGoogleMapsScript();
-      const google = (window as any).google;
-      const container = webMapContainerRef.current;
-      if (!container) return;
-      const center = { lat: selectedPlaces[0]?.lat ?? 37.5665, lng: selectedPlaces[0]?.lng ?? 126.9780 };
-      webMapInstance.current = new google.maps.Map(container, {
-        center,
-        zoom: 13,
-        disableDefaultUI: true,
-      });
-
-      if (searchInputRef.current) {
-        const ac = new google.maps.places.Autocomplete(searchInputRef.current, { fields: ['place_id', 'geometry', 'name', 'formatted_address'] });
-        ac.addListener('place_changed', () => {
-          const place = ac.getPlace();
-          if (place && place.geometry && place.geometry.location) {
-            addPlaceToPlan({
-              id: place.place_id || `${Date.now()}`,
-              placeName: place.name,
-              placeAddress: place.formatted_address || '',
-              lat: place.geometry.location.lat(),
-              lng: place.geometry.location.lng(),
-            });
-            if (searchInputRef.current) searchInputRef.current.value = '';
-          }
-        });
-      }
-      updateWebMap();
-    } catch (e) {
-      console.error('웹 지도 초기화 실패', e);
-    }
-  };
-
-  const updateWebMap = () => {
-    const google = (window as any).google;
-    if (!google || !webMapInstance.current) return;
-    webMarkers.current.forEach((m) => m.setMap(null));
-    webMarkers.current = [];
-    const map = webMapInstance.current;
-    const coords: any[] = [];
-    selectedPlaces.forEach((p: any, idx: number) => {
-      if (typeof p.lat === 'number' && typeof p.lng === 'number') {
-        const marker = new google.maps.Marker({
-          position: { lat: p.lat, lng: p.lng },
-          map,
-          label: { text: `${idx + 1}`, color: '#fff', fontWeight: '700' },
-        });
-        webMarkers.current.push(marker);
-        coords.push({ lat: p.lat, lng: p.lng });
-      }
-    });
-    if (webPolyline.current) {
-      webPolyline.current.setMap(null);
-      webPolyline.current = null;
-    }
-    if (coords.length > 1) {
-      webPolyline.current = new google.maps.Polyline({
-        path: coords,
-        geodesic: true,
-        strokeColor: '#6366f1',
-        strokeOpacity: 1.0,
-        strokeWeight: 3,
-      });
-      webPolyline.current.setMap(map);
-    }
-    if (coords.length > 0) {
-      const bounds = new google.maps.LatLngBounds();
-      coords.forEach((c) => bounds.extend(c));
-      map.fitBounds(bounds, 80);
-    }
-  };
-
-  useEffect(() => {
-    if (showMapSchedule) {
-      initWebMap();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showMapSchedule]);
-
-  useEffect(() => {
-    updateWebMap();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPlaces]);
 
   // 모달 내 장소 검색 debounce
   useEffect(() => {
@@ -597,27 +456,85 @@ export default function CourseWeb() {
     }
   };
 
-  const handleGenerate = () => {
-    resetPlanForm();
-    clearGeneratedPlan();
+  const handleGenerate = async () => {
+    // 필수 입력 검증 (웹/앱 공통)
+    if (!selectedDistrict) {
+      Toast.show({ type: 'error', text1: '알림', text2: '지역을 선택해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (!formData.startDate || !formData.endDate) {
+      Toast.show({ type: 'error', text1: '알림', text2: '여행 시작/종료 일자를 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    const start = parseDate(formData.startDate);
+    const end = parseDate(formData.endDate);
+    if (!start || !end) {
+      Toast.show({ type: 'error', text1: '알림', text2: '올바른 날짜 형식(YYYY-MM-DD)으로 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (end < start) {
+      Toast.show({ type: 'error', text1: '알림', text2: '종료 일자는 시작 일자보다 빠를 수 없습니다.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (!formData.firstDayStartTime || !formData.lastDayEndTime) {
+      Toast.show({ type: 'error', text1: '알림', text2: '여행 시작/종료 시간을 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    if (!isStartDateValid(formData.startDate)) {
+      Toast.show({ type: 'error', text1: '알림', text2: '여행 시작 일자는 오늘 이후여야 합니다.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    for (const item of formData.fixedSchedules) {
+      const err = validateFixedScheduleItem(item);
+      if (err) {
+        Toast.show({ type: 'error', text1: '알림', text2: `${item.title || '고정 일정'}: ${err}`, position: 'top', visibilityTime: 3000 });
+        return;
+      }
+    }
 
-    const durationHours =
-      typeof duration === 'string'
-        ? parseInt(duration.replace(/[^0-9]/g, ''), 10) || null
-        : null;
+    // 고정 일정 변환
+    const fixedEvents: FixedEvent[] = formData.fixedSchedules.map((item) => ({
+      date: item.date,
+      title: item.title,
+      start_time: item.startTime,
+      end_time: item.endTime,
+      place_name: item.placeName,
+      address: item.address,
+      lat: item.lat,
+      lng: item.lng,
+    }));
 
-    setPlanFormField('durationHours', durationHours);
-    setPlanFormField(
-      'transport',
-      selectedMove === 'walk' ? 'walk' : selectedMove === 'public' ? 'public' : 'car',
-    );
-    setPlanFormField(
-      'crowdMode',
-      selectedCrowd === 'avoid' ? 'quiet' : selectedCrowd === 'ok' ? 'hot' : 'normal',
-    );
-    setPlanFormField('categories', selectedCategories);
+    // API 요청 데이터 생성
+    const requestData: CreateCourseRequest = {
+      region: selectedDistrict,
+      start_date: formData.startDate,
+      end_date: formData.endDate,
+      first_day_start_time: formData.firstDayStartTime,
+      last_day_end_time: formData.lastDayEndTime,
+      fixed_events: fixedEvents,
+      transport_mode: selectedMove === 'car' ? 'car' : 'walkAndPublic',
+    };
 
-    router.push('/(tabs)/results');
+    setIsGenerating(true);
+
+    try {
+      const response = await planService.createCourse(requestData);
+
+      // 플랜 폼 리셋 및 결과 저장
+      resetPlanForm();
+      clearGeneratedPlan();
+
+      // 응답 데이터를 context에 저장
+      setLastGeneratedPlan(response);
+
+      // 결과 페이지로 이동
+      router.push('/(tabs)/results');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '코스 생성에 실패했습니다.';
+      Toast.show({ type: 'error', text1: '오류', text2: errorMessage, position: 'top', visibilityTime: 3000 });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -645,14 +562,15 @@ export default function CourseWeb() {
           <Text style={styles.summaryText}>목적·시간·이동수단만 알려주시면 돼요</Text>
         </View>
 
-        {/* 여행 기본 정보 (지도는 showMapSchedule 시 표시) */}
+        {/* 여행 기본 정보 */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>1. 여행 기본 정보</Text>
           <View style={styles.inputGroup}>
             <Text style={styles.label}>지역 선택</Text>
             <Pressable
-              style={styles.selectBox}
-              onPress={() => setDistrictModalVisible(true)}
+              style={[styles.selectBox, isGenerating && styles.inputDisabled]}
+              onPress={() => !isGenerating && setDistrictModalVisible(true)}
+              disabled={isGenerating}
             >
               <Text style={selectedDistrict ? styles.selectBoxText : styles.selectBoxPlaceholder}>
                 {selectedDistrict || '서울특별시 구를 선택하세요'}
@@ -662,8 +580,9 @@ export default function CourseWeb() {
           </View>
           {/* 고정 일정 */} 
           <Pressable
-            style={styles.fixedScheduleRow}
-            onPress={() => setIsFixedSchedule(!isFixedSchedule)}
+            style={[styles.fixedScheduleRow, isGenerating && styles.inputDisabled]}
+            onPress={() => !isGenerating && setIsFixedSchedule(!isFixedSchedule)}
+            disabled={isGenerating}
           >
             <View style={[styles.checkboxBox, isFixedSchedule && styles.checkboxBoxChecked]}>
               {isFixedSchedule && <Ionicons name="checkmark" size={14} color="#ffffff" />}
@@ -673,7 +592,7 @@ export default function CourseWeb() {
 
           {isFixedSchedule && (
             <View style={styles.fixedScheduleContent}>
-              <Pressable style={styles.addFixedButton} onPress={addFixedScheduleItem}>
+              <Pressable style={[styles.addFixedButton, isGenerating && styles.inputDisabled]} onPress={() => !isGenerating && addFixedScheduleItem()} disabled={isGenerating}>
                 <Ionicons name="add-circle" size={20} color="#6366f1" />
                 <Text style={styles.addFixedButtonText}>항목 추가</Text>
               </Pressable>
@@ -690,7 +609,7 @@ export default function CourseWeb() {
                   <View key={item.id} style={[styles.fixedScheduleCard, styles.fixedScheduleCardSlide]}>
                     <View style={styles.fixedScheduleCardHeader}>
                       <Text style={styles.fixedScheduleCardTitle}>{item.title || '고정 일정'}</Text>
-                      <Pressable style={styles.fixedScheduleRemove} onPress={() => removeFixedScheduleItem(item.id)}>
+                      <Pressable style={styles.fixedScheduleRemove} onPress={() => !isGenerating && removeFixedScheduleItem(item.id)} disabled={isGenerating}>
                         <Ionicons name="trash-outline" size={18} color="#ef4444" />
                       </Pressable>
                     </View>
@@ -699,20 +618,19 @@ export default function CourseWeb() {
                         <Ionicons name="location" size={16} color="#6366f1" style={styles.fixedSchedulePlaceIcon} />
                         <View style={styles.fixedSchedulePlaceText}>
                           {item.placeName ? <Text style={styles.fixedSchedulePlaceName} numberOfLines={1}>{item.placeName}</Text> : null}
-                          <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address || ''}</Text>
+                          {(item.address && String(item.address).trim()) ? (
+                            <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address}</Text>
+                          ) : null}
                         </View>
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
                       <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="2026-01-31"
-                        placeholderTextColor="#94a3b8"
+                      <WebDateInput
                         value={item.date}
-                        onChangeText={(v) => updateFixedScheduleItem(item.id, 'date', v)}
-                        // @ts-ignore - React Native Web supports type prop
-                        type="date"
+                        onChange={(v) => updateFixedScheduleItem(item.id, 'date', v)}
+                        disabled={isGenerating}
+                        placeholder="2026-01-31"
                       />
                     </View>
                     <View style={styles.inputGroup}>
@@ -723,31 +641,27 @@ export default function CourseWeb() {
                         placeholderTextColor="#94a3b8"
                         value={item.title}
                         onChangeText={(v) => updateFixedScheduleItem(item.id, 'title', v)}
+                        editable={!isGenerating}
                       />
                     </View>
                     <View style={styles.row}>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>시작 (HH:MM)</Text>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="14:00"
-                          placeholderTextColor="#94a3b8"
+                        <WebTimeInput
                           value={item.startTime}
-                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
-                          // @ts-ignore - React Native Web supports type prop
-                          type="time"
+                          onChange={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
+                          disabled={isGenerating}
+                          placeholder="14:00"
                         />
                       </View>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>종료 (HH:MM)</Text>
-                        <TextInput
-                          style={[styles.input, err ? styles.inputError : undefined]}
-                          placeholder="16:00"
-                          placeholderTextColor="#94a3b8"
+                        <WebTimeInput
                           value={item.endTime}
-                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
-                          // @ts-ignore - React Native Web supports type prop
-                          type="time"
+                          onChange={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
+                          disabled={isGenerating}
+                          hasError={!!err}
+                          placeholder="16:00"
                         />
                       </View>
                     </View>
@@ -763,7 +677,7 @@ export default function CourseWeb() {
                   <View key={item.id} style={[styles.fixedScheduleCard, styles.fixedScheduleCardSingle]}>
                     <View style={styles.fixedScheduleCardHeader}>
                       <Text style={styles.fixedScheduleCardTitle}>{item.title || '고정 일정'}</Text>
-                      <Pressable style={styles.fixedScheduleRemove} onPress={() => removeFixedScheduleItem(item.id)}>
+                      <Pressable style={styles.fixedScheduleRemove} onPress={() => !isGenerating && removeFixedScheduleItem(item.id)} disabled={isGenerating}>
                         <Ionicons name="trash-outline" size={18} color="#ef4444" />
                       </Pressable>
                     </View>
@@ -772,20 +686,19 @@ export default function CourseWeb() {
                         <Ionicons name="location" size={16} color="#6366f1" style={styles.fixedSchedulePlaceIcon} />
                         <View style={styles.fixedSchedulePlaceText}>
                           {item.placeName ? <Text style={styles.fixedSchedulePlaceName} numberOfLines={1}>{item.placeName}</Text> : null}
-                          <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address || ''}</Text>
+                          {(item.address && String(item.address).trim()) ? (
+                            <Text style={styles.fixedSchedulePlaceAddr} numberOfLines={1}>{item.address}</Text>
+                          ) : null}
                         </View>
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
                       <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="2026-01-31"
-                        placeholderTextColor="#94a3b8"
+                      <WebDateInput
                         value={item.date}
-                        onChangeText={(v) => updateFixedScheduleItem(item.id, 'date', v)}
-                        // @ts-ignore - React Native Web supports type prop
-                        type="date"
+                        onChange={(v) => updateFixedScheduleItem(item.id, 'date', v)}
+                        disabled={isGenerating}
+                        placeholder="2026-01-31"
                       />
                     </View>
                     <View style={styles.inputGroup}>
@@ -796,31 +709,27 @@ export default function CourseWeb() {
                         placeholderTextColor="#94a3b8"
                         value={item.title}
                         onChangeText={(v) => updateFixedScheduleItem(item.id, 'title', v)}
+                        editable={!isGenerating}
                       />
                     </View>
                     <View style={styles.row}>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>시작 (HH:MM)</Text>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="14:00"
-                          placeholderTextColor="#94a3b8"
+                        <WebTimeInput
                           value={item.startTime}
-                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
-                          // @ts-ignore - React Native Web supports type prop
-                          type="time"
+                          onChange={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
+                          disabled={isGenerating}
+                          placeholder="14:00"
                         />
                       </View>
                       <View style={styles.inputGroupFlex}>
                         <Text style={styles.label}>종료 (HH:MM)</Text>
-                        <TextInput
-                          style={[styles.input, err ? styles.inputError : undefined]}
-                          placeholder="16:00"
-                          placeholderTextColor="#94a3b8"
+                        <WebTimeInput
                           value={item.endTime}
-                          onChangeText={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
-                          // @ts-ignore - React Native Web supports type prop
-                          type="time"
+                          onChange={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
+                          disabled={isGenerating}
+                          hasError={!!err}
+                          placeholder="16:00"
                         />
                       </View>
                     </View>
@@ -840,8 +749,9 @@ export default function CourseWeb() {
               {purposes.map(purpose => (
                 <Pressable
                   key={purpose}
-                  style={[styles.pill, selectedPurposes.includes(purpose) && styles.pillActive]}
-                  onPress={() => togglePurpose(purpose)}>
+                  style={[styles.pill, selectedPurposes.includes(purpose) && styles.pillActive, isGenerating && styles.inputDisabled]}
+                  onPress={() => !isGenerating && togglePurpose(purpose)}
+                  disabled={isGenerating}>
                   <Text style={[styles.pillText, selectedPurposes.includes(purpose) && styles.pillTextActive]}>
                     {purpose}
                   </Text>
@@ -854,14 +764,12 @@ export default function CourseWeb() {
           <View style={styles.inputGroup}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>여행 시작 일자 (예: 2026-01-20)</Text>
-              <TextInput
-                style={[styles.input, formData.startDate && !isStartDateValid(formData.startDate) ? styles.inputError : undefined]}
-                placeholder="2026-01-20"
-                placeholderTextColor="#94a3b8"
+              <WebDateInput
                 value={formData.startDate}
-                onChangeText={(v) => setFormField('startDate', v)}
-                // @ts-ignore - React Native Web supports type prop
-                type="date"
+                onChange={(v) => setFormField('startDate', v)}
+                disabled={isGenerating}
+                hasError={!!(formData.startDate && !isStartDateValid(formData.startDate))}
+                placeholder="2026-01-20"
               />
               {formData.startDate && !isStartDateValid(formData.startDate) && (
                 <Text style={styles.validationError}>여행 시작 일자는 오늘 이후여야 합니다.</Text>
@@ -869,44 +777,38 @@ export default function CourseWeb() {
             </View>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>여행 종료 일자 (예: 2026-01-25)</Text>
-              <TextInput
-                style={[styles.input, (() => {
+              <WebDateInput
+                value={formData.endDate}
+                onChange={(v) => setFormField('endDate', v)}
+                disabled={isGenerating}
+                hasError={(() => {
                   const start = parseDate(formData.startDate);
                   const end = parseDate(formData.endDate);
-                  return start && end && end < start ? styles.inputError : undefined;
-                })()]}
+                  return !!(start && end && end < start);
+                })()}
                 placeholder="2026-01-25"
-                placeholderTextColor="#94a3b8"
-                value={formData.endDate}
-                onChangeText={(v) => setFormField('endDate', v)}
               />
               {formData.startDate && formData.endDate && totalDays >= 1 && (
                 <Text style={styles.totalDaysText}>총 여행 일수 : {totalDays}일</Text>
               )}
             </View>
-            <View style={styles.row}>
+            <View style={[styles.row, styles.rowTimeInputs]}>
               <View style={styles.inputGroupFlex}>
                 <Text style={styles.label}>여행 첫날 시작 시간 (예: 14:00)</Text>
-                <TextInput
-                  style={styles.input}
+                <WebTimeInput
                   placeholder="14:00"
-                  placeholderTextColor="#94a3b8"
                   value={formData.firstDayStartTime}
-                  onChangeText={(v) => setFormField('firstDayStartTime', v)}
-                  // @ts-ignore - React Native Web supports type prop
-                  type="time"
+                  onChange={(v) => setFormField('firstDayStartTime', v)}
+                  disabled={isGenerating}
                 />
               </View>
               <View style={styles.inputGroupFlex}>
                 <Text style={styles.label}>여행 마지막 날 종료 시간 (예: 18:00)</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="18:00"
-                  placeholderTextColor="#94a3b8"
+                <WebTimeInput
                   value={formData.lastDayEndTime}
-                  onChangeText={(v) => setFormField('lastDayEndTime', v)}
-                  // @ts-ignore - React Native Web supports type prop
-                  type="time"
+                  onChange={(v) => setFormField('lastDayEndTime', v)}
+                  disabled={isGenerating}
+                  placeholder="18:00"
                 />
               </View>
             </View>
@@ -919,6 +821,7 @@ export default function CourseWeb() {
               placeholder="예: 30000원"
               placeholderTextColor="#94a3b8"
               keyboardType="numeric"
+              editable={!isGenerating}
             />
           </View>
         </View>
@@ -937,6 +840,7 @@ export default function CourseWeb() {
               placeholderTextColor="#94a3b8"
               value={duration}
               onChangeText={setDuration}
+              editable={!isGenerating}
             />
             <Text style={styles.inputHint}>숫자 + 시간 단위 또는 표현을 자유롭게 입력하세요</Text>
           </View>
@@ -963,8 +867,9 @@ export default function CourseWeb() {
               {categories.map(category => (
                 <Pressable
                   key={category}
-                  style={[styles.pill, selectedCategories.includes(category) && styles.pillActive]}
-                  onPress={() => toggleCategory(category)}>
+                  style={[styles.pill, selectedCategories.includes(category) && styles.pillActive, isGenerating && styles.inputDisabled]}
+                  onPress={() => !isGenerating && toggleCategory(category)}
+                  disabled={isGenerating}>
                   <Text style={[styles.pillText, selectedCategories.includes(category) && styles.pillTextActive]}>
                     {category}
                   </Text>
@@ -983,8 +888,19 @@ export default function CourseWeb() {
               <Text style={styles.generateItem}>2  시작점 기준 최적 동선 코스 A안 · 교통 반영</Text>
               <Text style={styles.generateItem}>3  지도 기반 일정표 + 타임라인 한 화면 제공</Text>
             </View>
-            <Pressable style={styles.generateButton} onPress={handleGenerate}>
-              <Text style={styles.generateButtonText}>코스 생성하기 →</Text>
+            <Pressable
+              style={[styles.generateButton, isGenerating && styles.generateButtonDisabled]}
+              onPress={handleGenerate}
+              disabled={isGenerating}
+            >
+              {isGenerating ? (
+                <View style={styles.generateButtonLoading}>
+                  <ActivityIndicator size="small" color="#0f172a" />
+                  <Text style={styles.generateButtonText}>생성 중...</Text>
+                </View>
+              ) : (
+                <Text style={styles.generateButtonText}>코스 생성하기 →</Text>
+              )}
             </Pressable>
           </LinearGradient>
         </View>
@@ -1071,7 +987,7 @@ export default function CourseWeb() {
                         </View>
                         <View style={styles.searchResultInfo}>
                           <Text style={styles.searchResultName} numberOfLines={1}>{result.name}</Text>
-                          <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address}</Text>
+                          <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address ?? ''}</Text>
                         </View>
                         <Ionicons name="pin" size={24} color="#6366f1" />
                       </Pressable>
@@ -1112,39 +1028,27 @@ export default function CourseWeb() {
               </View>
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="2026-01-31"
-                  placeholderTextColor="#94a3b8"
+                <WebDateInput
                   value={draftForm.date}
-                  onChangeText={(v) => setDraftFormField('date', v)}
-                  // @ts-ignore - React Native Web supports type prop
-                  type="date"
+                  onChange={(v) => setDraftFormField('date', v)}
+                  placeholder="2026-01-31"
                 />
               </View>
               <View style={styles.row}>
                 <View style={styles.inputGroupFlex}>
                   <Text style={styles.label}>시작 시간 (HH:MM)</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="12:00"
-                    placeholderTextColor="#94a3b8"
+                  <WebTimeInput
                     value={draftForm.startTime}
-                    onChangeText={(v) => setDraftFormField('startTime', v)}
-                    // @ts-ignore - React Native Web supports type prop
-                    type="time"
+                    onChange={(v) => setDraftFormField('startTime', v)}
+                    placeholder="12:00"
                   />
                 </View>
                 <View style={styles.inputGroupFlex}>
                   <Text style={styles.label}>종료 시간 (HH:MM)</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="14:00"
-                    placeholderTextColor="#94a3b8"
+                  <WebTimeInput
                     value={draftForm.endTime}
-                    onChangeText={(v) => setDraftFormField('endTime', v)}
-                    // @ts-ignore - React Native Web supports type prop
-                    type="time"
+                    onChange={(v) => setDraftFormField('endTime', v)}
+                    placeholder="14:00"
                   />
                 </View>
               </View>
@@ -1390,6 +1294,9 @@ const styles = StyleSheet.create({
   inputError: {
     borderColor: '#ef4444',
     borderWidth: 1.5,
+  },
+  inputDisabled: {
+    opacity: 0.6,
   },
   addFixedButton: {
     flexDirection: 'row',
@@ -1676,11 +1583,16 @@ const styles = StyleSheet.create({
   },
   inputGroupFlex: {
     flex: 1,
+    minWidth: 0,
   },
   row: {
     flexDirection: width < 400 ? 'column' : 'row',
     gap: 14,
     marginBottom: 16,
+  },
+  rowTimeInputs: {
+    flexDirection: 'column',
+    gap: 14,
   },
   label: {
     fontSize: 13,
@@ -1826,6 +1738,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  generateButtonDisabled: {
+    opacity: 0.7,
+  },
+  generateButtonLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   selectBox: {
     flexDirection: 'row',

@@ -104,7 +104,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(response.user);
       })
       .catch((error) => {
-        console.log('서버 로그인 실패 (무시):', error?.message || error);
       });
     
     // 서버 응답을 기다리지 않고 바로 mock 데이터로 로그인 처리
@@ -125,7 +124,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 사용자 정보 설정
     setUser(mockUserData);
     setIsAuthLoading(false);
-    console.log('로그인 성공:', mockUserData);
     return true;
   };
 
@@ -169,10 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsAuthLoading(true);
     try {
       const token = await kakaoLogin();
-      console.log('카카오 로그인 토큰:', token);
-
       const profile = await kakaoGetProfile();
-      console.log('카카오 프로필:', profile);
 
       const userData: User = {
         user_id: profile.id ?? 0,
@@ -191,7 +186,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // 개발 환경에서 네이티브 모듈이 없는 경우 mock 데이터 사용
       if (error?.code === 'ENOENT' || error?.message?.includes('Native module')) {
-        console.log('카카오 SDK 설정 필요 - Mock 데이터 사용');
         const mockUserData: User = {
           user_id: 0,
           email: 'kakao_user@kakao.com',

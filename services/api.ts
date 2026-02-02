@@ -59,7 +59,6 @@ async function request<T>(
 
     return await response.json();
   } catch (error) {
-    console.error("API 요청 실패:", error);
     throw error;
   }
 }
@@ -160,7 +159,6 @@ export const api = {
 
       return await response.json();
     } catch (error) {
-      console.error("API 요청 실패:", error);
       throw error;
     }
   },
