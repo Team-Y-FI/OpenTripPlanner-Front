@@ -35,21 +35,21 @@ export default function ConfirmModal({
     switch (type) {
       case 'danger':
         return {
-          gradient: ['#ef4444', '#dc2626'],
+          gradient: ['#ef4444', '#dc2626'] as const,
           icon: 'alert-circle' as const,
           iconBg: '#fee2e2',
           iconColor: '#dc2626',
         };
       case 'warning':
         return {
-          gradient: ['#f59e0b', '#d97706'],
+          gradient: ['#f59e0b', '#d97706'] as const,
           icon: 'warning' as const,
           iconBg: '#fef3c7',
           iconColor: '#d97706',
         };
       case 'info':
         return {
-          gradient: ['#6366f1', '#0ea5e9'],
+          gradient: ['#6366f1', '#0ea5e9'] as const,
           icon: 'information-circle' as const,
           iconBg: '#dbeafe',
           iconColor: '#0ea5e9',
