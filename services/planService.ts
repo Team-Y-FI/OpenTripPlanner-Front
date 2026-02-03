@@ -84,7 +84,7 @@ export const planService = {
    * POST /otp/plans/generate
    */
   createCourse: async (data: CreateCourseRequest): Promise<CreateCourseResponse> => {
-    return api.post<CreateCourseResponse>('/plans/generate', data);
+    return api.post<CreateCourseResponse>('/plans/generate', data, { requiresAuth: false });
   },
 
   /**
