@@ -36,6 +36,7 @@ function AppStack() {
         <Stack.Screen name="index" />
         <Stack.Screen name="login" />
         <Stack.Screen name="signup" />
+        <Stack.Screen name="kakao-callback" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="course" />
         <Stack.Screen name="upload" />

@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { Platform } from "react-native";
 import Toast from "react-native-toast-message";
 import {
   authService,
@@ -30,6 +31,7 @@ interface AuthContextType {
     name: string,
   ) => Promise<boolean>;
   kakaoLoginHandler: () => Promise<boolean>;
+  kakaoCallbackHandler: (code: string) => Promise<boolean>;
   logout: () => Promise<void>;
 }
 
@@ -195,8 +197,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const kakaoLoginHandler = async (): Promise<boolean> => {
-    console.warn("Kakao login is not wired to backend yet.");
-    return false;
+    if (Platform.OS === "web") {
+      const apiUrl = (process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp").replace(/\/$/, "");
+      const loginUrl = `${apiUrl}/auth/kakao/login`;
+
+      try {
+        console.info("[auth] Kakao web redirect:", loginUrl);
+        if (typeof window !== "undefined" && window?.location) {
+          window.location.assign(loginUrl);
+          // 페이지 이동이 일어나므로, 호출부에서 실패 토스트를 띄우지 않게 true 처리
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+
+      Toast.show({
+        type: "error",
+        text1: "카카오 로그인 실패",
+        text2: "리다이렉트에 실패했습니다.",
+        position: "top",
+        visibilityTime: 2500,
+      });
+      return false;
+    }
+
+    setIsAuthLoading(true);
+    try {
+      const KakaoLogin = await import("@react-native-seoul/kakao-login");
+      const token = await (KakaoLogin as any).login();
+      const kakaoAccessToken =
+        token?.accessToken || token?.access_token || token?.accessToken?.token;
+
+      if (!kakaoAccessToken) {
+        throw new Error("Kakao access token is missing");
+      }
+
+      const me = await authService.kakaoLogin(String(kakaoAccessToken));
+      setUser(me);
+      return true;
+    } catch (error: any) {
+      console.error("카카오 로그인 실패:", error?.message || error);
+      return false;
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const kakaoCallbackHandler = async (code: string): Promise<boolean> => {
+    setIsAuthLoading(true);
+    try {
+      const me = await authService.kakaoCallback(code);
+      setUser(me);
+      return true;
+    } catch (error: any) {
+      console.error("카카오 콜백 처리 실패:", error?.message || error);
+      return false;
+    } finally {
+      setIsAuthLoading(false);
+    }
   };
 
   const logout = async () => {
@@ -222,6 +281,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         verifyEmailCode,
         signup,
         kakaoLoginHandler,
+        kakaoCallbackHandler,
         logout,
       }}
     >

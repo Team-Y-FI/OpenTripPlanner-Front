@@ -75,6 +75,29 @@ export const authService = {
     return api.get<User>("/users/me", { requiresAuth: true });
   },
 
+  kakaoLogin: async (kakaoAccessToken: string): Promise<User> => {
+    const token = await api.post<TokenResponse>(
+      "/auth/kakao/token",
+      { access_token: kakaoAccessToken },
+      { requiresAuth: false },
+    );
+
+    await tokenManager.setAccessToken(token.access_token);
+
+    return api.get<User>("/users/me", { requiresAuth: true });
+  },
+
+  kakaoCallback: async (code: string): Promise<User> => {
+    const token = await api.get<TokenResponse>(
+      `/auth/kakao/callback?code=${encodeURIComponent(code)}`,
+      { requiresAuth: false },
+    );
+
+    await tokenManager.setAccessToken(token.access_token);
+
+    return api.get<User>("/users/me", { requiresAuth: true });
+  },
+
   refresh: async (): Promise<TokenResponse> => {
     const token = await api.post<TokenResponse>(
       "/auth/refresh",
