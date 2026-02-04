@@ -22,7 +22,13 @@ const PASSWORD_POLICY = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^\w\s]).{8,}$/;
 
 export default function SignupScreen() {
   const router = useRouter();
-  const { signup, sendVerification, verifyEmailCode, kakaoLoginHandler, isAuthLoading } = useAuth();
+  const {
+    signup,
+    sendVerification,
+    verifyEmailCode,
+    kakaoLoginHandler,
+    isAuthLoading,
+  } = useAuth();
   const { isOnline } = useNetwork();
 
   const [userId, setUserId] = useState("");
@@ -235,7 +241,10 @@ export default function SignupScreen() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.keyboardView}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={styles.header}>
             <TouchableOpacity style={styles.backButton} onPress={handleBack}>
               <Ionicons name="arrow-back" size={24} color="#0f172a" />
@@ -245,20 +254,32 @@ export default function SignupScreen() {
           </View>
 
           <View style={styles.logoSection}>
-            <LinearGradient colors={["#6366f1", "#0ea5e9"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.logoCircle}>
+            <LinearGradient
+              colors={["#6366f1", "#0ea5e9"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.logoCircle}
+            >
               <Text style={styles.logoText}>O</Text>
             </LinearGradient>
-            <Text style={styles.welcomeText}>OpenTripPlanner에 오신 것을 환영합니다</Text>
+            <Text style={styles.welcomeText}>
+              OpenTripPlanner에 오신 것을 환영합니다
+            </Text>
           </View>
 
           <View style={styles.formSection}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>User ID</Text>
               <View style={styles.inputWrapper}>
-                <Ionicons name="person-outline" size={20} color="#64748b" style={styles.inputIcon} />
+                <Ionicons
+                  name="person-outline"
+                  size={20}
+                  color="#64748b"
+                  style={styles.inputIcon}
+                />
                 <TextInput
                   style={styles.input}
-                  placeholder="user_id (백엔드 기준: 문자열)"
+                  placeholder="user_id"
                   placeholderTextColor="#94a3b8"
                   value={userId}
                   onChangeText={setUserId}
@@ -270,7 +291,12 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>이름</Text>
               <View style={styles.inputWrapper}>
-                <Ionicons name="id-card-outline" size={20} color="#64748b" style={styles.inputIcon} />
+                <Ionicons
+                  name="id-card-outline"
+                  size={20}
+                  color="#64748b"
+                  style={styles.inputIcon}
+                />
                 <TextInput
                   style={styles.input}
                   placeholder="이름"
@@ -284,7 +310,12 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>이메일</Text>
               <View style={styles.inputWrapper}>
-                <Ionicons name="mail-outline" size={20} color="#64748b" style={styles.inputIcon} />
+                <Ionicons
+                  name="mail-outline"
+                  size={20}
+                  color="#64748b"
+                  style={styles.inputIcon}
+                />
                 <TextInput
                   style={styles.input}
                   placeholder="example@email.com"
@@ -300,8 +331,14 @@ export default function SignupScreen() {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.secondaryButton} onPress={handleSendVerification} disabled={isAuthLoading}>
-              <Text style={styles.secondaryButtonText}>{isCodeSent ? "인증코드 재발송" : "인증코드 보내기"}</Text>
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={handleSendVerification}
+              disabled={isAuthLoading}
+            >
+              <Text style={styles.secondaryButtonText}>
+                {isCodeSent ? "인증코드 재발송" : "인증코드 보내기"}
+              </Text>
             </TouchableOpacity>
 
             {isCodeSent && (
@@ -309,7 +346,12 @@ export default function SignupScreen() {
                 <View style={styles.inputGroup}>
                   <Text style={styles.label}>인증코드</Text>
                   <View style={styles.inputWrapper}>
-                    <Ionicons name="key-outline" size={20} color="#64748b" style={styles.inputIcon} />
+                    <Ionicons
+                      name="key-outline"
+                      size={20}
+                      color="#64748b"
+                      style={styles.inputIcon}
+                    />
                     <TextInput
                       style={styles.input}
                       placeholder="6자리 인증코드"
@@ -322,8 +364,14 @@ export default function SignupScreen() {
                   </View>
                 </View>
 
-                <TouchableOpacity style={styles.secondaryButton} onPress={handleVerifyCode} disabled={isAuthLoading}>
-                  <Text style={styles.secondaryButtonText}>{isEmailVerified ? "인증 완료" : "인증하기"}</Text>
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={handleVerifyCode}
+                  disabled={isAuthLoading}
+                >
+                  <Text style={styles.secondaryButtonText}>
+                    {isEmailVerified ? "인증 완료" : "인증하기"}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
@@ -331,7 +379,12 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>비밀번호</Text>
               <View style={styles.inputWrapper}>
-                <Ionicons name="lock-closed-outline" size={20} color="#64748b" style={styles.inputIcon} />
+                <Ionicons
+                  name="lock-closed-outline"
+                  size={20}
+                  color="#64748b"
+                  style={styles.inputIcon}
+                />
                 <TextInput
                   style={styles.input}
                   placeholder="비밀번호"
@@ -341,13 +394,20 @@ export default function SignupScreen() {
                   onChangeText={setPassword}
                 />
               </View>
-              {!!passwordHelp && <Text style={styles.helpText}>{passwordHelp}</Text>}
+              {!!passwordHelp && (
+                <Text style={styles.helpText}>{passwordHelp}</Text>
+              )}
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>비밀번호 확인</Text>
               <View style={styles.inputWrapper}>
-                <Ionicons name="lock-closed-outline" size={20} color="#64748b" style={styles.inputIcon} />
+                <Ionicons
+                  name="lock-closed-outline"
+                  size={20}
+                  color="#64748b"
+                  style={styles.inputIcon}
+                />
                 <TextInput
                   style={styles.input}
                   placeholder="비밀번호 확인"
@@ -359,8 +419,17 @@ export default function SignupScreen() {
               </View>
             </View>
 
-            <TouchableOpacity style={styles.signupButton} onPress={handleSignup} disabled={isAuthLoading}>
-              <LinearGradient colors={["#6366f1", "#0ea5e9"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.signupGradient}>
+            <TouchableOpacity
+              style={styles.signupButton}
+              onPress={handleSignup}
+              disabled={isAuthLoading}
+            >
+              <LinearGradient
+                colors={["#6366f1", "#0ea5e9"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.signupGradient}
+              >
                 <Text style={styles.signupButtonText}>회원가입</Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -371,7 +440,11 @@ export default function SignupScreen() {
               <View style={styles.divider} />
             </View>
 
-            <TouchableOpacity style={styles.kakaoButton} onPress={handleKakaoLogin} disabled={isAuthLoading}>
+            <TouchableOpacity
+              style={styles.kakaoButton}
+              onPress={handleKakaoLogin}
+              disabled={isAuthLoading}
+            >
               <View style={styles.kakaoButtonContent}>
                 <Text style={styles.kakaoIcon}>K</Text>
                 <Text style={styles.kakaoButtonText}>카카오로 시작하기</Text>
@@ -380,8 +453,7 @@ export default function SignupScreen() {
 
             <View style={styles.loginSection}>
               <Text style={styles.loginText}>이미 계정이 있으신가요?</Text>
-              <TouchableOpacity onPress={() => router.push("/login")}
-              >
+              <TouchableOpacity onPress={() => router.push("/login")}>
                 <Text style={styles.loginLink}>로그인</Text>
               </TouchableOpacity>
             </View>
