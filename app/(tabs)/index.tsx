@@ -15,7 +15,7 @@ const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { clearPlaces } = usePlaces();
+  const { clearPlaces, isCourseGenerating } = usePlaces();
   const { user, logout } = useAuth();
   const { startGlobalLoading, endGlobalLoading } = useSession();
   const { isOnline } = useNetwork();
@@ -125,6 +125,14 @@ export default function HomeScreen() {
           )}
         </View>
       </View>
+
+      {/* 코스 생성 중일 때 상단 알림 */}
+      {isCourseGenerating && (
+        <View style={styles.generatingBanner}>
+          <Text style={styles.generatingBannerText}>실시간 코스 생성 중...</Text>
+          <Text style={styles.generatingBannerSubtext}>완료되면 알려드릴게요</Text>
+        </View>
+      )}
 
       {/* 히어로 섹션 */}
       <View style={styles.hero}>
@@ -401,6 +409,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1e293b',
     flexShrink: 1,
+  },
+  generatingBanner: {
+    backgroundColor: '#e0e7ff',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginHorizontal: 20,
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+  },
+  generatingBannerText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#4338ca',
+  },
+  generatingBannerSubtext: {
+    fontSize: 13,
+    color: '#6366f1',
+    marginTop: 2,
   },
   headerLink: {
     fontSize: 14,

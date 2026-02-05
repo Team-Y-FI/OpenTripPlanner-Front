@@ -15,13 +15,20 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const { width } = Dimensions.get('window');
 
-const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '';
+const KAKAO_API_KEY = process.env.EXPO_PUBLIC_KAKAO_MAPS_KEY || '';
 
 interface SearchResult {
   place_id: string;
   name: string;
   formatted_address: string;
   geometry: { location: { lat: number; lng: number } };
+}
+
+// 카카오 맵 타입 선언
+declare global {
+  interface Window {
+    kakao: any;
+  }
 }
 
 // 고정 일정 한 건 타입 (지도 선택 장소 연동)
@@ -73,6 +80,9 @@ function parseDate(s: string): Date | null {
 // react-native-web TextInput는 type prop을 전달하지 않아 브라우저 피커 미동작 → 웹용 HTML input 사용
 const webInputBaseStyle: React.CSSProperties = {
   width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
   backgroundColor: '#ffffff',
   border: '1px solid #e2e8f0',
   borderRadius: 14,
@@ -150,15 +160,20 @@ function isStartDateValid(startDate: string): boolean {
 
 export default function CourseWeb() {
   const router = useRouter();
-  const { resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan } = usePlaces();
+  const { resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan, isCourseGenerating, setIsCourseGenerating, reportCourseGenerationComplete } = usePlaces();
   const [duration, setDuration] = useState('');
-  const [selectedMove, setSelectedMove] = useState('walk');
+  const [selectedMove, setSelectedMove] = useState('walkAndPublic');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [districtModalVisible, setDistrictModalVisible] = useState(false);
   const [formData, setFormData] = useState<CourseFormData>(initialFormData);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // 코스 생성 페이지 진입 시마다 이동수단 기본값을 도보+대중교통으로 설정
+  useEffect(() => {
+    setSelectedMove('walkAndPublic');
+  }, []);
 
   // 총 여행 일수 (시작/종료 일자 기반)
   const totalDays = (() => {
@@ -214,49 +229,66 @@ export default function CourseWeb() {
 
   const reverseGeocode = async (lat: number, lng: number) => {
     const noAddressText = '주소를 찾을 수 없습니다';
-    if (!GOOGLE_PLACES_API_KEY) {
+    if (!window.kakao || !window.kakao.maps) {
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
       return;
     }
     setReverseGeocoding(true);
     try {
-      const res = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_PLACES_API_KEY}&language=ko`
-      );
-      const data = await res.json();
-      const addr = data.results?.[0]?.formatted_address ?? '';
-      const placeName = addr || noAddressText;
-      setDraftPlace({ lat, lng, placeName, address: addr });
+      const geocoder = new window.kakao.maps.services.Geocoder();
+      geocoder.coord2Address(lng, lat, (result: any, status: any) => {
+        setReverseGeocoding(false);
+        if (status === window.kakao.maps.services.Status.OK && result[0]) {
+          const addr = result[0].road_address?.address_name || result[0].address?.address_name || '';
+          const placeName = addr || noAddressText;
+          setDraftPlace({ lat, lng, placeName, address: addr });
+        } else {
+          setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+        }
+      });
     } catch {
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-    } finally {
       setReverseGeocoding(false);
     }
   };
 
   const modalSearchPlaces = async (query: string) => {
-    if (!query.trim() || !GOOGLE_PLACES_API_KEY) {
+    if (!query.trim() || !window.kakao || !window.kakao.maps) {
       setModalSearchResults([]);
       return;
     }
     setModalIsSearching(true);
     try {
-      const response = await fetch(
-        `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&language=ko&key=${GOOGLE_PLACES_API_KEY}`
-      );
-      const data = await response.json();
-      if (data.results) {
-        setModalSearchResults(data.results.slice(0, 5).map((r: any) => ({
-          place_id: r.place_id,
-          name: r.name,
-          formatted_address: r.formatted_address,
-          geometry: { location: { lat: r.geometry.location.lat, lng: r.geometry.location.lng } },
-        })));
-        setModalShowResults(true);
+      const ps = new window.kakao.maps.services.Places();
+      // 지역 필터링: selectedDistrict가 있으면 해당 구로, 없으면 서울특별시 전체로 검색
+      let searchQuery = query.trim();
+      if (selectedDistrict) {
+        searchQuery = `${query} 서울특별시 ${selectedDistrict}`;
+      } else {
+        searchQuery = `${query} 서울특별시`;
       }
+      
+      // 서울특별시 지역으로 검색 제한 (남서·북동 좌표)
+      const bounds = new window.kakao.maps.LatLngBounds(
+        new window.kakao.maps.LatLng(37.413, 126.735), // 남서쪽
+        new window.kakao.maps.LatLng(37.715, 127.147)  // 북동쪽
+      );
+      ps.keywordSearch(searchQuery, (data: any, status: any) => {
+        setModalIsSearching(false);
+        if (status === window.kakao.maps.services.Status.OK && data) {
+          setModalSearchResults(data.map((r: any) => ({
+            place_id: r.id,
+            name: r.place_name,
+            formatted_address: r.road_address_name || r.address_name,
+            geometry: { location: { lat: parseFloat(r.y), lng: parseFloat(r.x) } },
+          })));
+          setModalShowResults(true);
+        } else {
+          setModalSearchResults([]);
+        }
+      }, { bounds });
     } catch (error) {
       console.error('장소 검색 오류:', error);
-    } finally {
       setModalIsSearching(false);
     }
   };
@@ -272,10 +304,10 @@ export default function CourseWeb() {
     setModalSearchQuery('');
     setModalSearchResults([]);
     setModalShowResults(false);
-    const google = (window as any).google;
-    if (google && modalMapInstance.current) {
-      modalMapInstance.current.panTo({ lat, lng });
-      modalMapInstance.current.setZoom(15);
+    if (window.kakao && modalMapInstance.current) {
+      const moveLatLng = new window.kakao.maps.LatLng(lat, lng);
+      modalMapInstance.current.panTo(moveLatLng);
+      modalMapInstance.current.setLevel(3);
     }
   };
 
@@ -363,16 +395,14 @@ export default function CourseWeb() {
     );
   };
 
-  const apiKey = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '';
-
-  const loadGoogleMapsScript = () =>
+  const loadKakaoMapsScript = () =>
     new Promise<void>((resolve, reject) => {
-      if (!apiKey) return reject(new Error('NO_API_KEY'));
-      if ((window as any).google && (window as any).google.maps) return resolve();
-      const id = 'google-maps-script';
+      if (!KAKAO_API_KEY) return reject(new Error('NO_API_KEY'));
+      if (window.kakao && window.kakao.maps && window.kakao.maps.services) return resolve();
+      const id = 'kakao-maps-script';
       if (document.getElementById(id)) {
         const check = setInterval(() => {
-          if ((window as any).google && (window as any).google.maps) {
+          if (window.kakao && window.kakao.maps && window.kakao.maps.services) {
             clearInterval(check);
             resolve();
           }
@@ -381,10 +411,11 @@ export default function CourseWeb() {
       }
       const script = document.createElement('script');
       script.id = id;
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+      script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_API_KEY}&libraries=services&autoload=false`;
       script.async = true;
-      script.defer = true;
-      script.onload = () => resolve();
+      script.onload = () => {
+        window.kakao.maps.load(() => resolve());
+      };
       script.onerror = (e) => reject(e);
       document.head.appendChild(script);
     });
@@ -405,46 +436,41 @@ export default function CourseWeb() {
 
   // 고정 일정 추가 모달: 지도 초기화 및 클릭 리스너
   useEffect(() => {
-    if (!addFixedModalVisible || !apiKey) return;
-    let listener: any = null;
-    loadGoogleMapsScript().then(() => {
-      const google = (window as any).google;
+    if (!addFixedModalVisible || !KAKAO_API_KEY) return;
+    loadKakaoMapsScript().then(() => {
       const container = modalMapContainerRef.current;
-      if (!container || !google) return;
-      const center = draftPlace ? { lat: draftPlace.lat, lng: draftPlace.lng } : { lat: 37.5665, lng: 126.9780 };
-      modalMapInstance.current = new google.maps.Map(container, {
+      if (!container || !window.kakao) return;
+      const center = draftPlace
+        ? new window.kakao.maps.LatLng(draftPlace.lat, draftPlace.lng)
+        : new window.kakao.maps.LatLng(37.5665, 126.9780);
+      const options = {
         center,
-        zoom: draftPlace ? 15 : 11,
-        disableDefaultUI: true,
-      });
-      listener = modalMapInstance.current.addListener('click', (e: any) => {
-        if (e.latLng) reverseGeocode(e.latLng.lat(), e.latLng.lng());
+        level: draftPlace ? 3 : 8,
+      };
+      modalMapInstance.current = new window.kakao.maps.Map(container, options);
+      window.kakao.maps.event.addListener(modalMapInstance.current, 'click', (mouseEvent: any) => {
+        const latlng = mouseEvent.latLng;
+        reverseGeocode(latlng.getLat(), latlng.getLng());
       });
     }).catch((e) => console.error('모달 지도 초기화 실패', e));
-    return () => {
-      if (listener && (window as any).google?.maps?.event) {
-        (window as any).google.maps.event.removeListener(listener);
-      }
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addFixedModalVisible, apiKey]);
+  }, [addFixedModalVisible]);
 
   // 모달 지도: draftPlace 변경 시 마커 갱신 및 이동
   useEffect(() => {
-    const google = (window as any).google;
-    if (!google || !modalMapInstance.current || !addFixedModalVisible) return;
+    if (!window.kakao || !modalMapInstance.current || !addFixedModalVisible) return;
     if (modalMarkerRef.current) {
       modalMarkerRef.current.setMap(null);
       modalMarkerRef.current = null;
     }
     if (draftPlace) {
-      modalMarkerRef.current = new google.maps.Marker({
-        position: { lat: draftPlace.lat, lng: draftPlace.lng },
+      const markerPosition = new window.kakao.maps.LatLng(draftPlace.lat, draftPlace.lng);
+      modalMarkerRef.current = new window.kakao.maps.Marker({
+        position: markerPosition,
         map: modalMapInstance.current,
-        title: draftPlace.placeName,
       });
-      modalMapInstance.current.panTo({ lat: draftPlace.lat, lng: draftPlace.lng });
-      modalMapInstance.current.setZoom(15);
+      modalMapInstance.current.panTo(markerPosition);
+      modalMapInstance.current.setLevel(3);
     }
   }, [addFixedModalVisible, draftPlace]);
 
@@ -458,7 +484,7 @@ export default function CourseWeb() {
 
   const handleGenerate = async () => {
     // 필수 입력 검증 (웹/앱 공통)
-    if (!selectedDistrict) {
+    if (selectedDistrict === undefined || selectedDistrict === null) {
       Toast.show({ type: 'error', text1: '알림', text2: '지역을 선택해주세요.', position: 'top', visibilityTime: 3000 });
       return;
     }
@@ -478,6 +504,11 @@ export default function CourseWeb() {
     }
     if (!formData.firstDayStartTime || !formData.lastDayEndTime) {
       Toast.show({ type: 'error', text1: '알림', text2: '여행 시작/종료 시간을 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    // 당일 여행이면서 시작 시간과 종료 시간이 같은 경우 검증
+    if (formData.startDate === formData.endDate && formData.firstDayStartTime === formData.lastDayEndTime) {
+      Toast.show({ type: 'error', text1: '알림', text2: '시작 시간과 종료 시간이 같으면 코스를 생성할 수 없습니다.', position: 'top', visibilityTime: 3000 });
       return;
     }
     if (!isStartDateValid(formData.startDate)) {
@@ -504,6 +535,12 @@ export default function CourseWeb() {
       lng: item.lng,
     }));
 
+    // 이미 다른 곳에서 코스 생성 중이면 중복 요청 방지
+    if (isCourseGenerating) {
+      Toast.show({ type: 'info', text1: '알림', text2: '이미 코스 생성이 진행 중입니다.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+
     // API 요청 데이터 생성
     const requestData: CreateCourseRequest = {
       region: selectedDistrict,
@@ -516,6 +553,7 @@ export default function CourseWeb() {
     };
 
     setIsGenerating(true);
+    setIsCourseGenerating(true);
 
     try {
       const response = await planService.createCourse(requestData);
@@ -524,14 +562,12 @@ export default function CourseWeb() {
       resetPlanForm();
       clearGeneratedPlan();
 
-      // 응답 데이터를 context에 저장
+      // 응답 데이터를 context에 저장 (성공/이동·토스트는 전역 리스너에서 처리)
       setLastGeneratedPlan(response);
-
-      // 결과 페이지로 이동
-      router.push('/(tabs)/results');
+      reportCourseGenerationComplete('success');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '코스 생성에 실패했습니다.';
-      Toast.show({ type: 'error', text1: '오류', text2: errorMessage, position: 'top', visibilityTime: 3000 });
+      reportCourseGenerationComplete('error', errorMessage);
     } finally {
       setIsGenerating(false);
     }
@@ -572,8 +608,8 @@ export default function CourseWeb() {
               onPress={() => !isGenerating && setDistrictModalVisible(true)}
               disabled={isGenerating}
             >
-              <Text style={selectedDistrict ? styles.selectBoxText : styles.selectBoxPlaceholder}>
-                {selectedDistrict || '서울특별시 구를 선택하세요'}
+              <Text style={selectedDistrict !== undefined ? styles.selectBoxText : styles.selectBoxPlaceholder}>
+                {selectedDistrict ? selectedDistrict : selectedDistrict === '' ? '전체 (서울특별시)' : '서울특별시 구를 선택하세요'}
               </Text>
               <Ionicons name="chevron-down" size={20} color="#64748b" />
             </Pressable>
@@ -625,7 +661,7 @@ export default function CourseWeb() {
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
-                      <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                      <Text style={styles.label}>날짜</Text>
                       <WebDateInput
                         value={item.date}
                         onChange={(v) => updateFixedScheduleItem(item.id, 'date', v)}
@@ -644,9 +680,9 @@ export default function CourseWeb() {
                         editable={!isGenerating}
                       />
                     </View>
-                    <View style={styles.row}>
+                    <View style={[styles.row, styles.rowTimeInputs]}>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>시작 (HH:MM)</Text>
+                        <Text style={styles.label}>시작</Text>
                         <WebTimeInput
                           value={item.startTime}
                           onChange={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
@@ -655,7 +691,7 @@ export default function CourseWeb() {
                         />
                       </View>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>종료 (HH:MM)</Text>
+                        <Text style={styles.label}>종료</Text>
                         <WebTimeInput
                           value={item.endTime}
                           onChange={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
@@ -693,7 +729,7 @@ export default function CourseWeb() {
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
-                      <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                      <Text style={styles.label}>날짜</Text>
                       <WebDateInput
                         value={item.date}
                         onChange={(v) => updateFixedScheduleItem(item.id, 'date', v)}
@@ -712,9 +748,9 @@ export default function CourseWeb() {
                         editable={!isGenerating}
                       />
                     </View>
-                    <View style={styles.row}>
+                    <View style={[styles.row, styles.rowTimeInputs]}>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>시작 (HH:MM)</Text>
+                        <Text style={styles.label}>시작</Text>
                         <WebTimeInput
                           value={item.startTime}
                           onChange={(v) => updateFixedScheduleItem(item.id, 'startTime', v)}
@@ -723,7 +759,7 @@ export default function CourseWeb() {
                         />
                       </View>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>종료 (HH:MM)</Text>
+                        <Text style={styles.label}>종료</Text>
                         <WebTimeInput
                           value={item.endTime}
                           onChange={(v) => updateFixedScheduleItem(item.id, 'endTime', v)}
@@ -763,7 +799,7 @@ export default function CourseWeb() {
           {/* 날짜 및 시간 (터미널 로직 대응) */}
           <View style={styles.inputGroup}>
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>여행 시작 일자 (예: 2026-01-20)</Text>
+              <Text style={styles.label}>여행 시작 일자</Text>
               <WebDateInput
                 value={formData.startDate}
                 onChange={(v) => setFormField('startDate', v)}
@@ -776,7 +812,7 @@ export default function CourseWeb() {
               )}
             </View>
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>여행 종료 일자 (예: 2026-01-25)</Text>
+              <Text style={styles.label}>여행 종료 일자</Text>
               <WebDateInput
                 value={formData.endDate}
                 onChange={(v) => setFormField('endDate', v)}
@@ -794,7 +830,7 @@ export default function CourseWeb() {
             </View>
             <View style={[styles.row, styles.rowTimeInputs]}>
               <View style={styles.inputGroupFlex}>
-                <Text style={styles.label}>여행 첫날 시작 시간 (예: 14:00)</Text>
+                <Text style={styles.label}>여행 첫날 시작 시간</Text>
                 <WebTimeInput
                   placeholder="14:00"
                   value={formData.firstDayStartTime}
@@ -803,7 +839,7 @@ export default function CourseWeb() {
                 />
               </View>
               <View style={styles.inputGroupFlex}>
-                <Text style={styles.label}>여행 마지막 날 종료 시간 (예: 18:00)</Text>
+                <Text style={styles.label}>여행 마지막 날 종료 시간</Text>
                 <WebTimeInput
                   value={formData.lastDayEndTime}
                   onChange={(v) => setFormField('lastDayEndTime', v)}
@@ -813,17 +849,6 @@ export default function CourseWeb() {
               </View>
             </View>
           </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>예산 (1인 기준, 선택)</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="예: 30000원"
-              placeholderTextColor="#94a3b8"
-              keyboardType="numeric"
-              editable={!isGenerating}
-            />
-          </View>
         </View>
 
         {/* 코스 조건 */}
@@ -831,19 +856,6 @@ export default function CourseWeb() {
           <Text style={styles.sectionTitle}>
             2. 코스 조건
           </Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>소요 시간</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="예: 3시간, 반나절, 1일"
-              placeholderTextColor="#94a3b8"
-              value={duration}
-              onChangeText={setDuration}
-              editable={!isGenerating}
-            />
-            <Text style={styles.inputHint}>숫자 + 시간 단위 또는 표현을 자유롭게 입력하세요</Text>
-          </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>이동수단</Text>
@@ -889,11 +901,11 @@ export default function CourseWeb() {
               <Text style={styles.generateItem}>3  지도 기반 일정표 + 타임라인 한 화면 제공</Text>
             </View>
             <Pressable
-              style={[styles.generateButton, isGenerating && styles.generateButtonDisabled]}
+              style={[styles.generateButton, (isGenerating || isCourseGenerating) && styles.generateButtonDisabled]}
               onPress={handleGenerate}
-              disabled={isGenerating}
+              disabled={isGenerating || isCourseGenerating}
             >
-              {isGenerating ? (
+              {(isGenerating || isCourseGenerating) ? (
                 <View style={styles.generateButtonLoading}>
                   <ActivityIndicator size="small" color="#0f172a" />
                   <Text style={styles.generateButtonText}>생성 중...</Text>
@@ -922,6 +934,17 @@ export default function CourseWeb() {
                 </Pressable>
               </View>
               <ScrollView style={styles.districtList}>
+                <Pressable
+                  style={[styles.districtItem, selectedDistrict === '' && styles.districtItemActive]}
+                  onPress={() => {
+                    setSelectedDistrict('');
+                    setDistrictModalVisible(false);
+                  }}
+                >
+                  <Text style={[styles.districtItemText, selectedDistrict === '' && styles.districtItemTextActive]}>
+                    전체 (서울특별시)
+                  </Text>
+                </Pressable>
                 {seoulDistricts.map((district) => (
                   <Pressable
                     key={district}
@@ -954,59 +977,66 @@ export default function CourseWeb() {
                 <Ionicons name="close" size={24} color="#64748b" />
               </Pressable>
             </View>
-            <View style={styles.addFixedModalMapSection}>
-              <View style={styles.mapSearchOverlay}>
-                <View style={styles.searchInputWrapper}>
-                  <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
-                  <TextInput
-                    style={styles.searchInput}
-                    placeholder="장소를 검색하세요"
-                    placeholderTextColor="#94a3b8"
-                    value={modalSearchQuery}
-                    onChangeText={setModalSearchQuery}
-                  />
-                  {modalIsSearching && (
-                    <ActivityIndicator size="small" color="#6366f1" style={styles.searchLoading} />
-                  )}
-                  {modalSearchQuery.length > 0 && !modalIsSearching && (
-                    <Pressable onPress={() => { setModalSearchQuery(''); setModalSearchResults([]); setModalShowResults(false); }}>
-                      <Ionicons name="close-circle" size={20} color="#94a3b8" />
-                    </Pressable>
+            <ScrollView style={styles.addFixedModalScroll} contentContainerStyle={styles.addFixedModalScrollContent} keyboardShouldPersistTaps="handled">
+              <View style={styles.addFixedModalMapSection}>
+                <View style={styles.mapSearchOverlay}>
+                  <View style={styles.searchInputWrapper}>
+                    <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder="장소를 검색하세요"
+                      placeholderTextColor="#94a3b8"
+                      value={modalSearchQuery}
+                      onChangeText={setModalSearchQuery}
+                    />
+                    {modalIsSearching && (
+                      <ActivityIndicator size="small" color="#6366f1" style={styles.searchLoading} />
+                    )}
+                    {modalSearchQuery.length > 0 && !modalIsSearching && (
+                      <Pressable onPress={() => { setModalSearchQuery(''); setModalSearchResults([]); setModalShowResults(false); }}>
+                        <Ionicons name="close-circle" size={20} color="#94a3b8" />
+                      </Pressable>
+                    )}
+                  </View>
+                  {modalShowResults && modalSearchResults.length > 0 && (
+                    <View style={styles.searchResultsOverlay}>
+                      <ScrollView
+                        style={styles.searchResultsScroll}
+                        showsVerticalScrollIndicator={true}
+                        keyboardShouldPersistTaps="handled"
+                      >
+                        {modalSearchResults.map((result) => (
+                          <Pressable
+                            key={result.place_id}
+                            style={styles.searchResultItem}
+                            onPress={() => selectModalSearchResult(result)}
+                          >
+                            <View style={styles.searchResultIcon}>
+                              <Ionicons name="location" size={16} color="#6366f1" />
+                            </View>
+                            <View style={styles.searchResultInfo}>
+                              <Text style={styles.searchResultName} numberOfLines={1}>{result.name}</Text>
+                              <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address ?? ''}</Text>
+                            </View>
+                            <Ionicons name="pin" size={24} color="#6366f1" />
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    </View>
                   )}
                 </View>
-                {modalShowResults && modalSearchResults.length > 0 && (
-                  <View style={styles.searchResultsOverlay}>
-                    {modalSearchResults.map((result) => (
-                      <Pressable
-                        key={result.place_id}
-                        style={styles.searchResultItem}
-                        onPress={() => selectModalSearchResult(result)}
-                      >
-                        <View style={styles.searchResultIcon}>
-                          <Ionicons name="location" size={16} color="#6366f1" />
-                        </View>
-                        <View style={styles.searchResultInfo}>
-                          <Text style={styles.searchResultName} numberOfLines={1}>{result.name}</Text>
-                          <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address ?? ''}</Text>
-                        </View>
-                        <Ionicons name="pin" size={24} color="#6366f1" />
-                      </Pressable>
-                    ))}
+                <div
+                  ref={modalMapContainerRef as any}
+                  style={{ width: '100%', height: '100%', minHeight: width * 0.3 }}
+                />
+                {reverseGeocoding && (
+                  <View style={styles.reverseGeocodeOverlay}>
+                    <ActivityIndicator size="small" color="#6366f1" />
+                    <Text style={styles.reverseGeocodeText}>주소 조회 중...</Text>
                   </View>
                 )}
               </View>
-              <div
-                ref={modalMapContainerRef as any}
-                style={{ width: '100%', height: '100%', minHeight: width * 0.3 }}
-              />
-              {reverseGeocoding && (
-                <View style={styles.reverseGeocodeOverlay}>
-                  <ActivityIndicator size="small" color="#6366f1" />
-                  <Text style={styles.reverseGeocodeText}>주소 조회 중...</Text>
-                </View>
-              )}
-            </View>
-            <ScrollView style={styles.addFixedModalFormSection} keyboardShouldPersistTaps="handled">
+              <View style={styles.addFixedModalFormSection}>
               <View style={styles.addFixedFormBlock}>
                 <Text style={styles.label}>선택한 장소</Text>
                 <View style={styles.placeReadOnly}>
@@ -1027,16 +1057,16 @@ export default function CourseWeb() {
                 />
               </View>
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                <Text style={styles.label}>날짜</Text>
                 <WebDateInput
                   value={draftForm.date}
                   onChange={(v) => setDraftFormField('date', v)}
                   placeholder="2026-01-31"
                 />
               </View>
-              <View style={styles.row}>
+              <View style={[styles.row, styles.rowTimeInputs]}>
                 <View style={styles.inputGroupFlex}>
-                  <Text style={styles.label}>시작 시간 (HH:MM)</Text>
+                  <Text style={styles.label}>시작 시간</Text>
                   <WebTimeInput
                     value={draftForm.startTime}
                     onChange={(v) => setDraftFormField('startTime', v)}
@@ -1044,7 +1074,7 @@ export default function CourseWeb() {
                   />
                 </View>
                 <View style={styles.inputGroupFlex}>
-                  <Text style={styles.label}>종료 시간 (HH:MM)</Text>
+                  <Text style={styles.label}>종료 시간</Text>
                   <WebTimeInput
                     value={draftForm.endTime}
                     onChange={(v) => setDraftFormField('endTime', v)}
@@ -1064,9 +1094,10 @@ export default function CourseWeb() {
                   <Text style={styles.addFixedConfirmButtonText}>확인</Text>
                 </Pressable>
               </View>
+            </View>
             </ScrollView>
-          </SafeAreaView>
-        </Modal>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1082,6 +1113,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingBottom: 40,
+    maxWidth: '100%',
   },
   header: {
     flexDirection: 'row',
@@ -1416,6 +1448,9 @@ const styles = StyleSheet.create({
     maxHeight: 220,
     overflow: 'hidden',
   },
+  searchResultsScroll: {
+    maxHeight: 220,
+  },
   searchResultItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1480,12 +1515,18 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
   },
+  addFixedModalScroll: {
+    flex: 1,
+  },
+  addFixedModalScrollContent: {
+    paddingBottom: 20,
+  },
   addFixedModalMapSection: {
     height: width * 0.3,
     position: 'relative',
+    marginBottom: 16,
   },
   addFixedModalFormSection: {
-    flex: 1,
     backgroundColor: '#ffffff',
     padding: 16,
   },
@@ -1577,13 +1618,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     padding: 20,
     marginBottom: 1,
+    overflow: 'hidden',
   },
   inputGroup: {
     marginBottom: 16,
+    minWidth: 0,
+    overflow: 'hidden',
   },
   inputGroupFlex: {
     flex: 1,
     minWidth: 0,
+    overflow: 'hidden',
   },
   row: {
     flexDirection: width < 400 ? 'column' : 'row',

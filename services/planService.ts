@@ -75,6 +75,57 @@ export interface CreateCourseResponse {
 // 코스 조회 응답 타입 (CreateCourseResponse와 동일)
 export type GetCourseResponse = CreateCourseResponse;
 
+// 저장된 플랜 생성 요청 타입
+export interface SavePlanRequest {
+  plan_id: string;
+  title?: string | null;
+}
+
+// 저장된 플랜 생성 응답 타입
+export interface SavePlanResponse {
+  saved_plan_id: string;
+}
+
+// 저장된 플랜 목록 조회 응답 타입
+export interface SavedPlanListItem {
+  saved_plan_id: string;
+  title: string | null;
+  region: string;
+  date: string;
+  variants_summary?: {
+    [key: string]: string;
+  };
+}
+
+export interface GetSavedPlansResponse {
+  items: SavedPlanListItem[];
+  next_cursor: string | null;
+}
+
+// 대체 장소 추천 요청 타입
+export interface ReplaceSpotsRequest {
+  plan_id: string;
+  day: string;  // "day1", "day2" 등
+  spot_names: string[];  // 대체하고 싶은 장소 이름들
+  region?: string | null;
+  categories?: string[] | null;
+}
+
+// 대체 장소 타입
+export interface AlternativeSpot {
+  name: string;
+  category: string;
+  category2?: string | null;
+  lat: number;
+  lng: number;
+  reason?: string | null;
+}
+
+// 대체 장소 추천 응답 타입
+export interface ReplaceSpotsResponse {
+  alternatives: AlternativeSpot[];
+}
+
 /**
  * 코스/플랜 관련 API 서비스
  */
@@ -84,7 +135,8 @@ export const planService = {
    * POST /otp/plans/generate
    */
   createCourse: async (data: CreateCourseRequest): Promise<CreateCourseResponse> => {
-    return api.post<CreateCourseResponse>('/plans/generate', data, { requiresAuth: false });
+    // Plan은 로그인한 사용자별로 DB에 저장되므로 인증이 필요
+    return api.post<CreateCourseResponse>('/plans/generate', data, { requiresAuth: true });
   },
 
   /**
@@ -93,6 +145,31 @@ export const planService = {
    */
   getCourse: async (planId: string): Promise<GetCourseResponse> => {
     return api.get<GetCourseResponse>(`/plans/${planId}`);
+  },
+
+  /**
+   * 저장된 플랜 생성
+   * POST /otp/records/plans
+   */
+  savePlan: async (data: SavePlanRequest): Promise<SavePlanResponse> => {
+    return api.post<SavePlanResponse>('/records/plans', data, { requiresAuth: true });
+  },
+
+  /**
+   * 저장된 플랜 목록 조회
+   * GET /otp/records/plans
+   */
+  getSavedPlans: async (limit?: number): Promise<GetSavedPlansResponse> => {
+    const params = limit ? `?limit=${limit}` : '';
+    return api.get<GetSavedPlansResponse>(`/records/plans${params}`, { requiresAuth: true });
+  },
+
+  /**
+   * 대체 장소 추천
+   * POST /otp/plans/replace-spots
+   */
+  recommendAlternatives: async (data: ReplaceSpotsRequest): Promise<ReplaceSpotsResponse> => {
+    return api.post<ReplaceSpotsResponse>('/plans/replace-spots', data, { requiresAuth: true });
   },
 };
 
