@@ -6,13 +6,18 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
 import * as ImagePicker from 'expo-image-picker';
-import { api } from '@/services/api';
+import { api, metaService } from '@/services';
 import Toast from 'react-native-toast-message';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
 import FullScreenLoader from '@/components/FullScreenLoader';
 
 const { width } = Dimensions.get('window');
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000/otp';
+const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
+
+const PICKER_MEDIA_TYPES = (ImagePicker as any).MediaType?.Images ?? (ImagePicker as any).MediaTypeOptions?.Images;
 
 interface ExifData {
   lat: number;
@@ -28,6 +33,21 @@ interface PlaceData {
   lng: number;
 }
 
+
+
+type UploadLimits = {
+  max_photos: number;
+  max_file_size_mb: number;
+  allowed_exts: string[];
+};
+
+const DEFAULT_LIMITS: UploadLimits = {
+  max_photos: 20,
+  max_file_size_mb: 10,
+  allowed_exts: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
+};
+
+const DEFAULT_PLACE_CATEGORIES = ["??", "??", "??", "??", "??", "??"];
 interface PhotoData {
   photo_id: string;
   file_name: string;
@@ -51,6 +71,19 @@ export default function UploadScreen() {
   const [placeCategory, setPlaceCategory] = useState('');
   const [photos, setPhotos] = useState<PhotoData[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [limits, setLimits] = useState<UploadLimits>(DEFAULT_LIMITS);
+  const [placeCategories, setPlaceCategories] = useState<string[]>(DEFAULT_PLACE_CATEGORIES);
+
+  useEffect(() => {
+    metaService
+      .getOptions()
+      .then((opts) => {
+        if (opts.place_categories?.length) {
+          setPlaceCategories(opts.place_categories.map((o) => o.label));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -73,10 +106,10 @@ export default function UploadScreen() {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: PICKER_MEDIA_TYPES,
         allowsMultipleSelection: true,
         quality: 0.8,
-        selectionLimit: 20 - photos.length, // 최대 20장 제한
+        selectionLimit: Math.max(0, limits.max_photos - photos.length), // 최대 20장 제한
       });
 
       if (!result.canceled && result.assets.length > 0) {
@@ -107,26 +140,77 @@ export default function UploadScreen() {
     startGlobalLoading();
 
     try {
+      const allowedExts = new Set(limits.allowed_exts.map((ext) => ext.toLowerCase()));
+      const maxBytes = limits.max_file_size_mb * 1024 * 1024;
+
+      const invalidExts: string[] = [];
+      const invalidSizes: string[] = [];
+
+      const validAssets = assets.filter((asset) => {
+        const name = asset.fileName || asset.uri.split('/').pop() || '';
+        const ext = name.split('.').pop()?.toLowerCase() || '';
+
+        if (ext && !allowedExts.has(ext)) {
+          invalidExts.push(name);
+          return false;
+        }
+
+        const size = (asset as any).fileSize;
+        if (typeof size === 'number' && size > maxBytes) {
+          invalidSizes.push(name);
+          return false;
+        }
+
+        return true;
+      });
+
+      if (invalidExts.length || invalidSizes.length) {
+        const messages: string[] = [];
+        if (invalidExts.length) {
+          messages.push(`???? ?? ???: ${invalidExts.slice(0, 3).join(', ')}`);
+        }
+        if (invalidSizes.length) {
+          messages.push(`?? ??: ${invalidSizes.slice(0, 3).join(', ')}`);
+        }
+        Toast.show({
+          type: 'error',
+          text1: '??? ??',
+          text2: messages.join(' / '),
+        });
+      }
+
+      if (validAssets.length === 0) {
+        return;
+      }
+
       const formData = new FormData();
       
       // FormData에 이미지 추가
-      assets.forEach((asset) => {
+      for (const asset of validAssets) {
         const uri = asset.uri;
-        const filename = uri.split('/').pop() || 'image.jpg';
+        const filename = asset.fileName || uri.split('/').pop() || 'image.jpg';
         const match = /\.(\w+)$/.exec(filename);
         const type = match ? `image/${match[1]}` : 'image/jpeg';
-        
-        formData.append('files', {
-          uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
-          name: filename,
-          type: type,
-        } as any);
-      });
+        const filenameWithExt = match ? filename : `${filename}.${type.split('/')[1] || 'jpg'}`;
+
+        if (Platform.OS === 'web') {
+          const resp = await fetch(uri);
+          const blob = await resp.blob();
+          const file = new File([blob], filenameWithExt, { type });
+          formData.append('files', file);
+        } else {
+          formData.append('files', {
+            uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+            name: filenameWithExt,
+            type: type,
+          } as any);
+        }
+      }
 
       // 백엔드 API 호출
       const response = await api.postFormData<{
         upload_id: string;
-        limits: { max_photos: number };
+        limits: { max_photos: number; max_file_size_mb: number; allowed_exts: string[] };
         photos: Array<{
           photo_id: string;
           file_name: string;
@@ -139,9 +223,16 @@ export default function UploadScreen() {
         requiresAuth: true,
       });
 
+      setLimits({
+        max_photos: response.limits?.max_photos ?? DEFAULT_LIMITS.max_photos,
+        max_file_size_mb: response.limits?.max_file_size_mb ?? DEFAULT_LIMITS.max_file_size_mb,
+        allowed_exts: response.limits?.allowed_exts ?? DEFAULT_LIMITS.allowed_exts,
+      });
+
       // 업로드된 사진들을 상태에 추가
       const newPhotos: PhotoData[] = response.photos.map((photo) => ({
         ...photo,
+        thumbnail_url: photo.thumbnail_url ? `${STORAGE_BASE}${photo.thumbnail_url}` : null,
         selected: false,
       }));
 
@@ -216,6 +307,28 @@ export default function UploadScreen() {
       return;
     }
 
+    const target = photos.find((p) => p.photo_id === editingPhotoId);
+    const lat = target?.exif?.lat ?? null;
+    const lng = target?.exif?.lng ?? null;
+
+    if (!placeCategory) {
+      Toast.show({
+        type: 'error',
+        text1: '???? ??',
+        text2: '?? ????? ??? ???.',
+      });
+      return;
+    }
+
+    if (lat == null || lng == null) {
+      Toast.show({
+        type: 'error',
+        text1: '?? ?? ??',
+        text2: 'EXIF ?? ??? ??? ??? ? ????.',
+      });
+      return;
+    }
+
     startGlobalLoading();
 
     try {
@@ -230,8 +343,8 @@ export default function UploadScreen() {
           name: placeName,
           address: placeAddress || null,
           category: placeCategory || null,
-          lat: photos.find((p) => p.photo_id === editingPhotoId)?.exif?.lat || null,
-          lng: photos.find((p) => p.photo_id === editingPhotoId)?.exif?.lng || null,
+          lat,
+          lng,
         },
         { requiresAuth: true }
       );
@@ -244,6 +357,7 @@ export default function UploadScreen() {
                 ...photo,
                 place: response.place,
                 status: 'recognized' as const,
+                thumbnail_url: response.thumbnail_url ? `${STORAGE_BASE}${response.thumbnail_url}` : photo.thumbnail_url,
               }
             : photo
         )
@@ -331,10 +445,12 @@ export default function UploadScreen() {
           <Pressable 
             style={styles.uploadButton}
             onPress={handlePickImages}
-            disabled={isUploading || photos.length >= 20}>
+            disabled={isUploading || photos.length >= limits.max_photos}>
             <Text style={styles.uploadButtonText}>파일 선택</Text>
           </Pressable>
-          <Text style={styles.uploadNote}>최대 20장 · JPEG / PNG · EXIF 위치 정보 자동 분석</Text>
+          <Text style={styles.uploadNote}>
+            ?? {limits.max_photos}? ? {limits.max_file_size_mb}MB ? {limits.allowed_exts.join(' / ').toUpperCase()}
+          </Text>
         </LinearGradient>
       </View>
 
@@ -538,7 +654,7 @@ export default function UploadScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>카테고리</Text>
                 <View style={styles.categoryButtons}>
-                  {['카페', '음식점', '전시', '공원', '쇼핑', '기타'].map((category) => (
+                  {placeCategories.map((category) => (
                     <Pressable
                       key={category}
                       style={[

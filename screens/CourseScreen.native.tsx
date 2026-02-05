@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
 import MapView, { Marker } from 'react-native-maps';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { planService, CreateCourseRequest, FixedEvent } from '@/services';
+import { planService, CreateCourseRequest, FixedEvent, utilsService } from '@/services';
 
 // Android에서 LayoutAnimation 활성화
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -150,61 +150,21 @@ export default function CourseScreen() {
     setModalShowResults(false);
   };
 
-  const buildAddressFromComponents = (components: Array<{ long_name: string; short_name: string; types: string[] }>): string => {
-    const get = (type: string) => components.find((c) => c.types.includes(type))?.long_name ?? '';
-    const parts = [
-      get('street_number'),
-      get('route'),
-      get('sublocality_level_1') || get('sublocality'),
-      get('locality'),
-      get('administrative_area_level_1'),
-      get('country'),
-    ].filter(Boolean);
-    return parts.join(' ') || '';
-  };
-
   const reverseGeocode = async (lat: number, lng: number) => {
-    const noAddressText = '주소를 찾을 수 없습니다';
-    if (!GOOGLE_PLACES_API_KEY) {
-      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-      return;
-    }
+    const noAddressText = '??? ?? ? ????';
     setReverseGeocoding(true);
     try {
-      const res = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_PLACES_API_KEY}&language=ko`
-      );
-      const data = await res.json();
-      if (data.status === 'REQUEST_DENIED') {
-        const errMsg = data.error_message ?? '';
-        console.warn(
-          'Geocoding API REQUEST_DENIED. Geocoding API 활성화, 결제 연결, API 키 제한(앱 패키지/지문)을 확인하세요.',
-          errMsg ? `상세: ${errMsg}` : ''
-        );
-        setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-        return;
-      }
-      if (data.status === 'ZERO_RESULTS' || !data.results?.length) {
-        setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-        return;
-      }
-      let addr = '';
-      for (const r of data.results) {
-        addr = r.formatted_address ?? '';
-        if (!addr && r.address_components?.length) {
-          addr = buildAddressFromComponents(r.address_components);
-        }
-        if (addr) break;
-      }
-      const placeName = addr || noAddressText;
-      setDraftPlace({ lat, lng, placeName, address: addr });
+      const res = await utilsService.reverseGeocode(lat, lng);
+      const addr = res.road_address ?? res.address ?? '';
+      setDraftPlace({ lat, lng, placeName: addr || noAddressText, address: addr });
     } catch (err) {
-      console.warn('역지오코딩 실패:', err);
+      console.warn('????? ??:', err);
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
     } finally {
       setReverseGeocoding(false);
     }
   };
+
 
   const modalSearchPlaces = async (query: string) => {
     if (!query.trim() || !GOOGLE_PLACES_API_KEY) {

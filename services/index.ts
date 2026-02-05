@@ -3,6 +3,8 @@
  */
 export { api, tokenManager } from "./api";
 export { authService } from "./authService";
+export { metaService } from "./metaService";
+export { utilsService } from "./utilsService";
 export { planService } from "./planService";
 export type {
   User,
@@ -21,3 +23,6 @@ export type {
   TimelineItem,
   DayPlan,
 } from "./planService";
+
+export type { MetaOption, MetaOptions } from "./metaService";
+export type { ReverseGeocodeResponse } from "./utilsService";
