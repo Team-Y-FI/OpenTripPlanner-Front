@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Platform } from 'react-native';
 import { PlacesProvider } from '@/contexts/PlacesContext';
+import CourseGenerationListener from '@/components/CourseGenerationListener';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { SessionProvider, useSession } from '@/contexts/SessionContext';
 import { NetworkProvider } from '@/contexts/NetworkContext';
@@ -74,6 +75,7 @@ export default function RootLayout() {
         <AuthProvider>
           <SessionProvider>
             <PlacesProvider>
+              <CourseGenerationListener />
               <AppStack />
               <Toast />
             </PlacesProvider>
