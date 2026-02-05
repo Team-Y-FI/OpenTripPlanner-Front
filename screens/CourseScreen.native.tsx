@@ -150,6 +150,19 @@ export default function CourseScreen() {
     setModalShowResults(false);
   };
 
+  const buildAddressFromComponents = (components: Array<{ long_name: string; short_name: string; types: string[] }>): string => {
+    const get = (type: string) => components.find((c) => c.types.includes(type))?.long_name ?? '';
+    const parts = [
+      get('street_number'),
+      get('route'),
+      get('sublocality_level_1') || get('sublocality'),
+      get('locality'),
+      get('administrative_area_level_1'),
+      get('country'),
+    ].filter(Boolean);
+    return parts.join(' ') || '';
+  };
+
   const reverseGeocode = async (lat: number, lng: number) => {
     const noAddressText = '주소를 찾을 수 없습니다';
     if (!GOOGLE_PLACES_API_KEY) {
@@ -162,10 +175,31 @@ export default function CourseScreen() {
         `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_PLACES_API_KEY}&language=ko`
       );
       const data = await res.json();
-      const addr = data.results?.[0]?.formatted_address ?? '';
+      if (data.status === 'REQUEST_DENIED') {
+        const errMsg = data.error_message ?? '';
+        console.warn(
+          'Geocoding API REQUEST_DENIED. Geocoding API 활성화, 결제 연결, API 키 제한(앱 패키지/지문)을 확인하세요.',
+          errMsg ? `상세: ${errMsg}` : ''
+        );
+        setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+        return;
+      }
+      if (data.status === 'ZERO_RESULTS' || !data.results?.length) {
+        setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+        return;
+      }
+      let addr = '';
+      for (const r of data.results) {
+        addr = r.formatted_address ?? '';
+        if (!addr && r.address_components?.length) {
+          addr = buildAddressFromComponents(r.address_components);
+        }
+        if (addr) break;
+      }
       const placeName = addr || noAddressText;
       setDraftPlace({ lat, lng, placeName, address: addr });
-    } catch {
+    } catch (err) {
+      console.warn('역지오코딩 실패:', err);
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
     } finally {
       setReverseGeocoding(false);
@@ -179,12 +213,20 @@ export default function CourseScreen() {
     }
     setModalIsSearching(true);
     try {
+      // 지역 필터링: selectedDistrict가 있으면 해당 구로, 없으면 서울특별시 전체로 검색
+      let searchQuery = query.trim();
+      if (selectedDistrict) {
+        searchQuery = `${query} 서울특별시 ${selectedDistrict}`;
+      } else {
+        searchQuery = `${query} 서울특별시`;
+      }
+
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&language=ko&key=${GOOGLE_PLACES_API_KEY}`
+        `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(searchQuery)}&language=ko&key=${GOOGLE_PLACES_API_KEY}`
       );
       const data = await response.json();
       if (data.results) {
-        setModalSearchResults(data.results.slice(0, 5).map((r: any) => ({
+        setModalSearchResults(data.results.map((r: any) => ({
           place_id: r.place_id,
           name: r.name,
           formatted_address: r.formatted_address,
@@ -306,13 +348,21 @@ export default function CourseScreen() {
 
     setIsSearching(true);
     try {
+      // 지역 필터링: selectedDistrict가 있으면 해당 구로, 없으면 서울특별시 전체로 검색
+      let searchQuery = query.trim();
+      if (selectedDistrict) {
+        searchQuery = `${query} 서울특별시 ${selectedDistrict}`;
+      } else {
+        searchQuery = `${query} 서울특별시`;
+      }
+
       const response = await fetch(
-        `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&language=ko&key=${GOOGLE_PLACES_API_KEY}`
+        `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(searchQuery)}&language=ko&key=${GOOGLE_PLACES_API_KEY}`
       );
       const data = await response.json();
 
       if (data.results) {
-        setSearchResults(data.results.slice(0, 5).map((r: any) => ({
+        setSearchResults(data.results.map((r: any) => ({
           place_id: r.place_id,
           name: r.name,
           formatted_address: r.formatted_address,
@@ -428,7 +478,7 @@ export default function CourseScreen() {
 
   const handleGenerate = async () => {
     // 필수 입력 검증 (웹/앱 공통)
-    if (!selectedDistrict) {
+    if (selectedDistrict === undefined || selectedDistrict === null) {
       Toast.show({ type: 'error', text1: '알림', text2: '지역을 선택해주세요.', position: 'top', visibilityTime: 3000 });
       return;
     }
@@ -448,6 +498,11 @@ export default function CourseScreen() {
     }
     if (!formData.firstDayStartTime || !formData.lastDayEndTime) {
       Toast.show({ type: 'error', text1: '알림', text2: '여행 시작/종료 시간을 입력해주세요.', position: 'top', visibilityTime: 3000 });
+      return;
+    }
+    // 당일 여행이면서 시작 시간과 종료 시간이 같은 경우 검증
+    if (formData.startDate === formData.endDate && formData.firstDayStartTime === formData.lastDayEndTime) {
+      Toast.show({ type: 'error', text1: '알림', text2: '시작 시간과 종료 시간이 같으면 코스를 생성할 수 없습니다.', position: 'top', visibilityTime: 3000 });
       return;
     }
     if (!isStartDateValid(formData.startDate)) {
@@ -543,8 +598,8 @@ export default function CourseScreen() {
               onPress={() => !isGenerating && setDistrictModalVisible(true)}
               disabled={isGenerating}
             >
-              <Text style={selectedDistrict ? styles.selectBoxText : styles.selectBoxPlaceholder}>
-                {selectedDistrict || '서울특별시 구를 선택하세요'}
+              <Text style={selectedDistrict !== undefined ? styles.selectBoxText : styles.selectBoxPlaceholder}>
+                {selectedDistrict ? selectedDistrict : selectedDistrict === '' ? '전체 (서울특별시)' : '서울특별시 구를 선택하세요'}
               </Text>
               <Ionicons name="chevron-down" size={20} color="#64748b" />
             </Pressable>
@@ -591,7 +646,7 @@ export default function CourseScreen() {
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
-                      <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                      <Text style={styles.label}>날짜</Text>
                       <Pressable onPress={() => !isGenerating && setShowFixedDatePicker(item.id)} disabled={isGenerating}>
                         <TextInput
                           style={styles.input}
@@ -631,7 +686,7 @@ export default function CourseScreen() {
                     </View>
                     <View style={styles.row}>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>시작 (HH:MM)</Text>
+                        <Text style={styles.label}>시작 시간</Text>
                         <Pressable onPress={() => !isGenerating && setShowFixedStartTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={styles.input}
@@ -664,7 +719,7 @@ export default function CourseScreen() {
                           )}
                       </View>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>종료 (HH:MM)</Text>
+                        <Text style={styles.label}>종료 시간</Text>
                         <Pressable onPress={() => !isGenerating && setShowFixedEndTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={[styles.input, err ? styles.inputError : undefined]}
@@ -725,7 +780,7 @@ export default function CourseScreen() {
                       </View>
                     ) : null}
                     <View style={styles.inputGroup}>
-                      <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+                      <Text style={styles.label}>날짜</Text>
                       <Pressable onPress={() => !isGenerating && setShowFixedDatePicker(item.id)} disabled={isGenerating}>
                         <TextInput
                           style={styles.input}
@@ -765,7 +820,7 @@ export default function CourseScreen() {
                     </View>
                     <View style={styles.row}>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>시작 (HH:MM)</Text>
+                        <Text style={styles.label}>시작 시간</Text>
                         <Pressable onPress={() => !isGenerating && setShowFixedStartTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={styles.input}
@@ -798,7 +853,7 @@ export default function CourseScreen() {
                           )}
                       </View>
                       <View style={styles.inputGroupFlex}>
-                        <Text style={styles.label}>종료 (HH:MM)</Text>
+                        <Text style={styles.label}>종료 시간</Text>
                         <Pressable onPress={() => !isGenerating && setShowFixedEndTimePicker(item.id)} disabled={isGenerating}>
                           <TextInput
                             style={[styles.input, err ? styles.inputError : undefined]}
@@ -881,7 +936,7 @@ export default function CourseScreen() {
 
           <View style={styles.row}>
             <View style={styles.inputGroupFlex}>
-              <Text style={styles.label}>여행 시작 일자 (예: 2026-01-20)</Text>
+              <Text style={styles.label}>여행 시작 일자</Text>
               <Pressable onPress={() => !isGenerating && setShowStartDatePicker(true)} disabled={isGenerating}>
                 <TextInput
                   style={[styles.input, formData.startDate && !isStartDateValid(formData.startDate) ? styles.inputError : undefined]}
@@ -912,7 +967,7 @@ export default function CourseScreen() {
               )}
             </View>
             <View style={styles.inputGroupFlex}>
-              <Text style={styles.label}>여행 종료 일자 (예: 2026-01-25)</Text>
+              <Text style={styles.label}>여행 종료 일자</Text>
               <Pressable onPress={() => !isGenerating && setShowEndDatePicker(true)} disabled={isGenerating}>
                 <TextInput
                   style={[styles.input, (() => {
@@ -946,7 +1001,7 @@ export default function CourseScreen() {
             </View>
             <View style={styles.row}>
               <View style={styles.inputGroupFlex}>
-                <Text style={styles.label}>여행 첫날 시작 시간 (예: 14:00)</Text>
+                <Text style={styles.label}>여행 첫날 시작 시간</Text>
                 <Pressable onPress={() => !isGenerating && setShowFirstDayStartTimePicker(true)} disabled={isGenerating}>
                   <TextInput
                     style={styles.input}
@@ -979,7 +1034,7 @@ export default function CourseScreen() {
                 )}
               </View>
               <View style={styles.inputGroupFlex}>
-                <Text style={styles.label}>여행 마지막 날 종료 시간 (예: 18:00)</Text>
+                <Text style={styles.label}>여행 마지막 날 종료 시간</Text>
                 <Pressable onPress={() => !isGenerating && setShowLastDayEndTimePicker(true)} disabled={isGenerating}>
                   <TextInput
                     style={styles.input}
@@ -1012,16 +1067,6 @@ export default function CourseScreen() {
                 )}
               </View>
             </View>
-            <View style={styles.inputGroupFlex}>
-              <Text style={styles.label}>예산 (1인 기준, 선택)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="예: 30000원"
-                placeholderTextColor="#94a3b8"
-                keyboardType="numeric"
-                editable={!isGenerating}
-              />
-            </View>
           </View>
         </View>
 
@@ -1030,19 +1075,6 @@ export default function CourseScreen() {
           <Text style={styles.sectionTitle}>
             2. 코스 조건
           </Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>소요 시간</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="예: 3시간, 반나절, 1일"
-              placeholderTextColor="#94a3b8"
-              value={duration}
-              onChangeText={setDuration}
-              editable={!isGenerating}
-            />
-            <Text style={styles.inputHint}>숫자 + 시간 단위 또는 표현을 자유롭게 입력하세요</Text>
-          </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>이동수단</Text>
@@ -1122,6 +1154,17 @@ export default function CourseScreen() {
               </Pressable>
             </View>
             <ScrollView style={styles.districtList}>
+              <Pressable
+                style={[styles.districtItem, selectedDistrict === '' && styles.districtItemActive]}
+                onPress={() => {
+                  setSelectedDistrict('');
+                  setDistrictModalVisible(false);
+                }}
+              >
+                <Text style={[styles.districtItemText, selectedDistrict === '' && styles.districtItemTextActive]}>
+                  전체 (서울특별시)
+                </Text>
+              </Pressable>
               {seoulDistricts.map((district) => (
                 <Pressable
                   key={district}
@@ -1154,82 +1197,90 @@ export default function CourseScreen() {
               <Ionicons name="close" size={24} color="#64748b" />
             </Pressable>
           </View>
-          <View style={styles.addFixedModalMapSection}>
-            <View style={styles.mapSearchOverlay}>
-              <View style={styles.searchInputWrapper}>
-                <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="장소를 검색하세요"
-                  placeholderTextColor="#94a3b8"
-                  value={modalSearchQuery}
-                  onChangeText={setModalSearchQuery}
-                  returnKeyType="search"
-                />
-                {modalIsSearching && (
-                  <ActivityIndicator size="small" color="#6366f1" style={styles.searchLoading} />
-                )}
-                {modalSearchQuery.length > 0 && !modalIsSearching && (
-                  <Pressable onPress={() => { setModalSearchQuery(''); setModalSearchResults([]); setModalShowResults(false); }}>
-                    <Ionicons name="close-circle" size={20} color="#94a3b8" />
-                  </Pressable>
+          <ScrollView style={styles.addFixedModalScroll} contentContainerStyle={styles.addFixedModalScrollContent} keyboardShouldPersistTaps="handled">
+            <View style={styles.addFixedModalMapSection}>
+              <View style={styles.mapSearchOverlay}>
+                <View style={styles.searchInputWrapper}>
+                  <Ionicons name="search" size={18} color="#94a3b8" style={styles.searchIcon} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="장소를 검색하세요"
+                    placeholderTextColor="#94a3b8"
+                    value={modalSearchQuery}
+                    onChangeText={setModalSearchQuery}
+                    returnKeyType="search"
+                  />
+                  {modalIsSearching && (
+                    <ActivityIndicator size="small" color="#6366f1" style={styles.searchLoading} />
+                  )}
+                  {modalSearchQuery.length > 0 && !modalIsSearching && (
+                    <Pressable onPress={() => { setModalSearchQuery(''); setModalSearchResults([]); setModalShowResults(false); }}>
+                      <Ionicons name="close-circle" size={20} color="#94a3b8" />
+                    </Pressable>
+                  )}
+                </View>
+                {modalShowResults && modalSearchResults.length > 0 && (
+                  <View style={styles.searchResultsOverlay}>
+                    <ScrollView
+                      style={styles.searchResultsScroll}
+                      showsVerticalScrollIndicator={true}
+                      nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      {modalSearchResults.map((result) => (
+                        <Pressable
+                          key={result.place_id}
+                          style={styles.searchResultItem}
+                          onPress={() => selectModalSearchResult(result)}
+                        >
+                          <View style={styles.searchResultIcon}>
+                            <Ionicons name="location" size={16} color="#6366f1" />
+                          </View>
+                          <View style={styles.searchResultInfo}>
+                            <Text style={styles.searchResultName} numberOfLines={1}>{result.name}</Text>
+                            <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address}</Text>
+                          </View>
+                          <Ionicons name="pin" size={24} color="#6366f1" />
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
                 )}
               </View>
-              {modalShowResults && modalSearchResults.length > 0 && (
-                <View style={styles.searchResultsOverlay}>
-                  {modalSearchResults.map((result) => (
-                    <Pressable
-                      key={result.place_id}
-                      style={styles.searchResultItem}
-                      onPress={() => selectModalSearchResult(result)}
-                    >
-                      <View style={styles.searchResultIcon}>
-                        <Ionicons name="location" size={16} color="#6366f1" />
+              <MapView
+                ref={modalMapRef}
+                style={styles.addFixedModalMap}
+                initialRegion={
+                  draftPlace
+                    ? { latitude: draftPlace.lat, longitude: draftPlace.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 }
+                    : { latitude: 37.5665, longitude: 126.9780, latitudeDelta: 0.1, longitudeDelta: 0.1 }
+                }
+                onPress={(e) => {
+                  const { latitude, longitude } = e.nativeEvent.coordinate;
+                  reverseGeocode(latitude, longitude);
+                }}
+              >
+                {draftPlace && (
+                  <Marker
+                    coordinate={{ latitude: draftPlace.lat, longitude: draftPlace.lng }}
+                    title={draftPlace.placeName}
+                  >
+                    <View style={styles.markerContainer}>
+                      <View style={[styles.markerCircle, styles.markerCircleFixed]}>
+                        <Ionicons name="pin" size={18} color="#fff" />
                       </View>
-                      <View style={styles.searchResultInfo}>
-                        <Text style={styles.searchResultName} numberOfLines={1}>{result.name}</Text>
-                        <Text style={styles.searchResultAddress} numberOfLines={1}>{result.formatted_address}</Text>
-                      </View>
-                      <Ionicons name="pin" size={24} color="#6366f1" />
-                    </Pressable>
-                  ))}
+                    </View>
+                  </Marker>
+                )}
+              </MapView>
+              {reverseGeocoding && (
+                <View style={styles.reverseGeocodeOverlay}>
+                  <ActivityIndicator size="small" color="#6366f1" />
+                  <Text style={styles.reverseGeocodeText}>주소 조회 중...</Text>
                 </View>
               )}
             </View>
-            <MapView
-              ref={modalMapRef}
-              style={styles.addFixedModalMap}
-              initialRegion={
-                draftPlace
-                  ? { latitude: draftPlace.lat, longitude: draftPlace.lng, latitudeDelta: 0.02, longitudeDelta: 0.02 }
-                  : { latitude: 37.5665, longitude: 126.9780, latitudeDelta: 0.1, longitudeDelta: 0.1 }
-              }
-              onPress={(e) => {
-                const { latitude, longitude } = e.nativeEvent.coordinate;
-                reverseGeocode(latitude, longitude);
-              }}
-            >
-              {draftPlace && (
-                <Marker
-                  coordinate={{ latitude: draftPlace.lat, longitude: draftPlace.lng }}
-                  title={draftPlace.placeName}
-                >
-                  <View style={styles.markerContainer}>
-                    <View style={[styles.markerCircle, styles.markerCircleFixed]}>
-                      <Ionicons name="pin" size={18} color="#fff" />
-                    </View>
-                  </View>
-                </Marker>
-              )}
-            </MapView>
-            {reverseGeocoding && (
-              <View style={styles.reverseGeocodeOverlay}>
-                <ActivityIndicator size="small" color="#6366f1" />
-                <Text style={styles.reverseGeocodeText}>주소 조회 중...</Text>
-              </View>
-            )}
-          </View>
-          <ScrollView style={styles.addFixedModalFormSection} keyboardShouldPersistTaps="handled">
+            <View style={styles.addFixedModalFormSection}>
             <View style={styles.addFixedFormBlock}>
               <Text style={styles.label}>선택한 장소</Text>
               <View style={styles.placeReadOnly}>
@@ -1250,7 +1301,7 @@ export default function CourseScreen() {
               />
             </View>
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>날짜 (YYYY-MM-DD)</Text>
+              <Text style={styles.label}>날짜</Text>
               <Pressable onPress={() => setShowModalDatePicker(true)}>
                 <TextInput
                   style={styles.input}
@@ -1279,7 +1330,7 @@ export default function CourseScreen() {
             </View>
             <View style={styles.row}>
               <View style={styles.inputGroupFlex}>
-                <Text style={styles.label}>시작 시간 (HH:MM)</Text>
+                <Text style={styles.label}>시작 시간</Text>
                 <Pressable onPress={() => setShowModalStartTimePicker(true)}>
                   <TextInput
                     style={styles.input}
@@ -1310,7 +1361,7 @@ export default function CourseScreen() {
                 )}
               </View>
               <View style={styles.inputGroupFlex}>
-                <Text style={styles.label}>종료 시간 (HH:MM)</Text>
+                <Text style={styles.label}>종료 시간</Text>
                 <Pressable onPress={() => setShowModalEndTimePicker(true)}>
                   <TextInput
                     style={styles.input}
@@ -1355,6 +1406,7 @@ export default function CourseScreen() {
                 <Text style={styles.addFixedConfirmButtonText}>확인</Text>
               </Pressable>
             </View>
+          </View>
           </ScrollView>
         </SafeAreaView>
       </Modal>
@@ -1794,10 +1846,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
     backgroundColor: '#ffffff',
     borderRadius: 10,
-    maxHeight: 180,
+    maxHeight: 200,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#e2e8f0',
+  },
+  searchResultsScroll: {
+    maxHeight: 200,
   },
   map: {
     width: '100%',
@@ -1890,17 +1945,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
   },
+  addFixedModalScroll: {
+    flex: 1,
+  },
+  addFixedModalScrollContent: {
+    paddingBottom: 20,
+  },
   addFixedModalMapSection: {
     height: width * 0.5,
     position: 'relative',
     paddingHorizontal: 14,
+    marginBottom: 16,
   },
   addFixedModalMap: {
     width: '100%',
     height: '100%',
   },
   addFixedModalFormSection: {
-    flex: 1,
     backgroundColor: '#ffffff',
     padding: 16,
   },
