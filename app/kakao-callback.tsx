@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import Toast from "react-native-toast-message";
 import FullScreenLoader from "@/components/FullScreenLoader";
 import { useAuth } from "@/contexts/AuthContext";
+import * as AuthSession from "expo-auth-session";
 
 export default function KakaoCallbackScreen() {
   const router = useRouter();
@@ -51,7 +52,10 @@ export default function KakaoCallbackScreen() {
     }
 
     (async () => {
-      const ok = await kakaoCallbackHandler(code);
+      const redirectUri = AuthSession.makeRedirectUri({
+        path: "kakao-callback",
+      });
+      const ok = await kakaoCallbackHandler(code, redirectUri);
       if (ok) {
         router.replace("/(tabs)");
         return;

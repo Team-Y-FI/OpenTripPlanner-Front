@@ -7,6 +7,10 @@ import React, {
 } from "react";
 import { Platform } from "react-native";
 import Toast from "react-native-toast-message";
+import * as AuthSession from "expo-auth-session";
+import * as WebBrowser from "expo-web-browser";
+import Constants from "expo-constants";
+
 import {
   authService,
   api,
@@ -16,6 +20,11 @@ import {
 import { AuthExpiredError } from "@/services/api";
 
 export type User = AuthUser;
+
+// ✅ OAuth redirect 완료 처리 (iOS에서 특히 중요)
+WebBrowser.maybeCompleteAuthSession();
+
+const isExpoGo = Constants.appOwnership === "expo";
 
 interface AuthContextType {
   user: User | null;
@@ -31,14 +40,16 @@ interface AuthContextType {
     name: string,
   ) => Promise<boolean>;
   kakaoLoginHandler: () => Promise<boolean>;
-  kakaoCallbackHandler: (code: string) => Promise<boolean>;
+  kakaoCallbackHandler: (
+    code: string,
+    redirectUri?: string,
+  ) => Promise<boolean>;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 function isLikelyNetworkError(err: any): boolean {
-  // 웹에서는 navigator.onLine이 어느 정도 도움 됨
   try {
     if (
       typeof navigator !== "undefined" &&
@@ -49,7 +60,6 @@ function isLikelyNetworkError(err: any): boolean {
   } catch {
     // ignore
   }
-
   const msg = String(err?.message || "");
   return (
     msg.includes("Network request failed") ||
@@ -64,29 +74,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
   const [isBootstrapped, setIsBootstrapped] = useState<boolean>(false);
 
-  // ✅ “부트스트랩 자동 호출에서만 1회” 토스트 보장
   const shownSessionExpiredToastRef = useRef(false);
   const shownNetworkToastRef = useRef(false);
-  const bootstrapRanRef = useRef(false); // (선택) StrictMode에서 effect 2번 실행 방지
+  const bootstrapRanRef = useRef(false);
 
   useEffect(() => {
     const bootstrapAuth = async () => {
-      // StrictMode에서 effect가 2번 실행될 수 있어서, 원치 않으면 막아준다.
       if (bootstrapRanRef.current) return;
       bootstrapRanRef.current = true;
 
       setIsAuthLoading(true);
       try {
-        /**
-         * ✅ 메모리 access 구조에서는 access_token이 없을 수 있으니
-         * accessToken 유무로 early return 하지 말고 /users/me만 시도한다.
-         *
-         * /users/me가 401이면 api.ts가 refresh 후 1회 재시도한다.
-         */
         const me = await api.get<User>("/users/me", { requiresAuth: true });
         setUser(me);
       } catch (err: any) {
-        // (A) 네트워크/오프라인: 토스트 1회만, 로그아웃/토큰 클리어는 하지 않음
         if (isLikelyNetworkError(err)) {
           if (!shownNetworkToastRef.current) {
             shownNetworkToastRef.current = true;
@@ -101,7 +102,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // (B) 세션 만료(refresh까지 실패): 토스트 1회 + 토큰/유저 정리
         const isExpired =
           err instanceof AuthExpiredError ||
           String(err?.message || "").includes("AUTH_EXPIRED");
@@ -122,7 +122,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // 기타 예외는 보수적으로 비로그인 처리(원하면 여기서 토스트는 생략)
         setUser(null);
       } finally {
         setIsBootstrapped(true);
@@ -196,16 +195,91 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * ✅ Expo Go fallback: Web OAuth
+   */
+  const kakaoOAuthFallback = async (): Promise<boolean> => {
+    const apiUrl = (
+      process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp"
+    ).replace(/\/$/, "");
+
+    // ✅ 핵심: Expo Go에서 exp://8081 복귀(=Metro 의존)를 피하기 위해 useProxy 사용
+    const redirectUri = AuthSession.makeRedirectUri({ path: "kakao-callback" });
+
+    const startUrl = `${apiUrl}/auth/kakao/login?redirect_uri=${encodeURIComponent(redirectUri)}`;
+
+    console.info("[auth] kakao oauth fallback redirectUri =", redirectUri);
+    console.info("[auth] kakao oauth fallback startUrl =", startUrl);
+
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(
+        startUrl,
+        redirectUri,
+      );
+
+      if (result.type !== "success" || !result.url) {
+        Toast.show({
+          type: "error",
+          text1: "카카오 로그인 취소",
+          text2: "로그인이 취소되었거나 실패했습니다.",
+          position: "top",
+          visibilityTime: 2500,
+        });
+        return false;
+      }
+
+      const u = new URL(result.url);
+      const code = u.searchParams.get("code");
+      const error = u.searchParams.get("error");
+
+      if (error) {
+        Toast.show({
+          type: "error",
+          text1: "카카오 로그인 실패",
+          text2: String(error),
+          position: "top",
+          visibilityTime: 2500,
+        });
+        return false;
+      }
+
+      if (!code) {
+        Toast.show({
+          type: "error",
+          text1: "카카오 로그인 실패",
+          text2: "인가 코드가 없습니다.",
+          position: "top",
+          visibilityTime: 2500,
+        });
+        return false;
+      }
+
+      return await kakaoCallbackHandler(code, redirectUri);
+    } catch (e: any) {
+      console.error("[auth] kakao oauth fallback failed:", e?.message || e);
+      Toast.show({
+        type: "error",
+        text1: "카카오 로그인 실패",
+        text2: "OAuth 처리 중 오류가 발생했습니다.",
+        position: "top",
+        visibilityTime: 2500,
+      });
+      return false;
+    }
+  };
+
   const kakaoLoginHandler = async (): Promise<boolean> => {
+    // web: 기존 redirect 방식 유지
     if (Platform.OS === "web") {
-      const apiUrl = (process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp").replace(/\/$/, "");
+      const apiUrl = (
+        process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp"
+      ).replace(/\/$/, "");
       const loginUrl = `${apiUrl}/auth/kakao/login`;
 
       try {
         console.info("[auth] Kakao web redirect:", loginUrl);
         if (typeof window !== "undefined" && window?.location) {
           window.location.assign(loginUrl);
-          // 페이지 이동이 일어나므로, 호출부에서 실패 토스트를 띄우지 않게 true 처리
           return true;
         }
       } catch {
@@ -222,32 +296,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
+    // ✅ Expo Go: 네이티브 모듈 경로 절대 타지 않음
+    if (isExpoGo) {
+      return await kakaoOAuthFallback();
+    }
+
     setIsAuthLoading(true);
     try {
       const KakaoLogin = await import("@react-native-seoul/kakao-login");
-      const token = await (KakaoLogin as any).login();
+      const nativeLoginFn = (KakaoLogin as any)?.login;
+
+      // dev client인데도 모듈이 없으면 fallback
+      if (typeof nativeLoginFn !== "function") {
+        return await kakaoOAuthFallback();
+      }
+
+      const token = await nativeLoginFn();
       const kakaoAccessToken =
         token?.accessToken || token?.access_token || token?.accessToken?.token;
 
-      if (!kakaoAccessToken) {
-        throw new Error("Kakao access token is missing");
-      }
+      if (!kakaoAccessToken) throw new Error("Kakao access token is missing");
 
       const me = await authService.kakaoLogin(String(kakaoAccessToken));
       setUser(me);
       return true;
     } catch (error: any) {
       console.error("카카오 로그인 실패:", error?.message || error);
+      if (String(error?.message || "").includes("null")) {
+        return await kakaoOAuthFallback();
+      }
       return false;
     } finally {
       setIsAuthLoading(false);
     }
   };
 
-  const kakaoCallbackHandler = async (code: string): Promise<boolean> => {
+  const kakaoCallbackHandler = async (
+    code: string,
+    redirectUri?: string,
+  ): Promise<boolean> => {
     setIsAuthLoading(true);
     try {
-      const me = await authService.kakaoCallback(code);
+      const me = await authService.kakaoCallback(code, redirectUri);
       setUser(me);
       return true;
     } catch (error: any) {
