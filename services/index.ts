@@ -1,7 +1,7 @@
 /**
  * 모든 서비스를 한 곳에서 export
  */
-export { api, tokenManager } from "./api";
+export { api, tokenManager, API_URL } from "./api";
 export { authService } from "./authService";
 export { metaService } from "./metaService";
 export { utilsService } from "./utilsService";

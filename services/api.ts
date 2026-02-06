@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // .env에서 API URL 가져오기
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp";
+export const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp";
 
 interface RequestOptions extends RequestInit {
   requiresAuth?: boolean;
@@ -98,7 +98,12 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      const message =
+        errorData?.detail ||
+        errorData?.error?.message ||
+        errorData?.message ||
+        `HTTP error! status: ${response.status}`;
+      throw new Error(message);
     }
 
     if (response.status === 204) {
@@ -150,7 +155,12 @@ async function requestFormData<T>(endpoint: string, formData: FormData, options:
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      const message =
+        errorData?.detail ||
+        errorData?.error?.message ||
+        errorData?.message ||
+        `HTTP error! status: ${response.status}`;
+      throw new Error(message);
     }
 
     if (response.status === 204) {

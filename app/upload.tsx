@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
 import * as ImagePicker from 'expo-image-picker';
-import { api, metaService } from '@/services';
+import { api, metaService, API_URL } from '@/services';
 import Toast from 'react-native-toast-message';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
@@ -14,10 +14,9 @@ import FullScreenLoader from '@/components/FullScreenLoader';
 
 const { width } = Dimensions.get('window');
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000/otp';
 const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
 
-const PICKER_MEDIA_TYPES = (ImagePicker as any).MediaType?.Images ?? (ImagePicker as any).MediaTypeOptions?.Images;
+const PICKER_MEDIA_TYPES: ImagePicker.MediaType[] = ['images'];
 
 interface ExifData {
   lat: number;
@@ -47,7 +46,7 @@ const DEFAULT_LIMITS: UploadLimits = {
   allowed_exts: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
 };
 
-const DEFAULT_PLACE_CATEGORIES = ["??", "??", "??", "??", "??", "??"];
+const DEFAULT_PLACE_CATEGORIES = ["카페", "맛집", "전시", "공원", "야경", "쇼핑"];
 interface PhotoData {
   photo_id: string;
   file_name: string;
@@ -167,14 +166,14 @@ export default function UploadScreen() {
       if (invalidExts.length || invalidSizes.length) {
         const messages: string[] = [];
         if (invalidExts.length) {
-          messages.push(`???? ?? ???: ${invalidExts.slice(0, 3).join(', ')}`);
+          messages.push(`지원하지 않는 확장자: ${invalidExts.slice(0, 3).join(', ')}`);
         }
         if (invalidSizes.length) {
-          messages.push(`?? ??: ${invalidSizes.slice(0, 3).join(', ')}`);
+          messages.push(`용량 초과: ${invalidSizes.slice(0, 3).join(', ')}`);
         }
         Toast.show({
           type: 'error',
-          text1: '??? ??',
+          text1: '업로드 제한',
           text2: messages.join(' / '),
         });
       }
@@ -314,17 +313,8 @@ export default function UploadScreen() {
     if (!placeCategory) {
       Toast.show({
         type: 'error',
-        text1: '???? ??',
-        text2: '?? ????? ??? ???.',
-      });
-      return;
-    }
-
-    if (lat == null || lng == null) {
-      Toast.show({
-        type: 'error',
-        text1: '?? ?? ??',
-        text2: 'EXIF ?? ??? ??? ??? ? ????.',
+        text1: '카테고리 선택',
+        text2: '카테고리를 선택해주세요.',
       });
       return;
     }
@@ -449,7 +439,7 @@ export default function UploadScreen() {
             <Text style={styles.uploadButtonText}>파일 선택</Text>
           </Pressable>
           <Text style={styles.uploadNote}>
-            ?? {limits.max_photos}? ? {limits.max_file_size_mb}MB ? {limits.allowed_exts.join(' / ').toUpperCase()}
+            최대 {limits.max_photos}장 · {limits.max_file_size_mb}MB · {limits.allowed_exts.join(' / ').toUpperCase()}
           </Text>
         </LinearGradient>
       </View>
