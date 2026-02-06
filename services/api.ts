@@ -1,7 +1,8 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+// /services/api.ts
 
 // .env에서 API URL 가져오기
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp";
+export const API_URL =
+  process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp";
 
 interface RequestOptions extends RequestInit {
   requiresAuth?: boolean;
@@ -11,6 +12,24 @@ type RefreshResponse = {
   access_token: string;
 };
 
+/**
+ * ✅ refresh까지 실패했을 때(=세션 만료) 구분용 에러
+ */
+export class AuthExpiredError extends Error {
+  constructor(message = "AUTH_EXPIRED") {
+    super(message);
+    this.name = "AuthExpiredError";
+  }
+}
+
+/**
+ * ✅ Access Token은 메모리(in-memory)에만 저장
+ */
+let inMemoryAccessToken: string | null = null;
+
+/**
+ * ✅ refresh 동시성 제어 (동시에 여러 요청이 401이어도 refresh는 1회만)
+ */
 let refreshInFlight: Promise<string | null> | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -25,7 +44,10 @@ async function refreshAccessToken(): Promise<string | null> {
       });
 
       if (!response.ok) return null;
-      const data = (await response.json().catch(() => null)) as RefreshResponse | null;
+
+      const data = (await response
+        .json()
+        .catch(() => null)) as RefreshResponse | null;
       const token = data?.access_token;
       if (!token) return null;
 
@@ -42,24 +64,22 @@ async function refreshAccessToken(): Promise<string | null> {
 }
 
 async function attachAccessToken(headers: HeadersInit): Promise<HeadersInit> {
-  try {
-    const token = await AsyncStorage.getItem("access_token");
-    if (!token) return headers;
+  const token = await tokenManager.getAccessToken();
+  if (!token) return headers;
 
-    return {
-      ...(headers as Record<string, string>),
-      Authorization: `Bearer ${token}`,
-    };
-  } catch (error) {
-    console.error("access_token 로드 실패:", error);
-    return headers;
-  }
+  return {
+    ...(headers as Record<string, string>),
+    Authorization: `Bearer ${token}`,
+  };
 }
 
 /**
- * API 요청을 처리하는 기본 함수
+ * API 요청(JSON)
  */
-async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+async function request<T>(
+  endpoint: string,
+  options: RequestOptions = {},
+): Promise<T> {
   const { requiresAuth = true, headers = {}, ...restOptions } = options;
 
   let requestHeaders: HeadersInit = {
@@ -77,52 +97,55 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
     fetch(url, {
       ...restOptions,
       headers: hdrs,
-      // refresh_token은 HTTP-only 쿠키로 관리 → 쿠키가 포함되도록 설정
-      credentials: "include",
+      credentials: "include", // refresh_token 쿠키 포함
     });
 
-  try {
-    let response = await doFetch(requestHeaders);
+  let response = await doFetch(requestHeaders);
 
-    // 401: access token 만료 → refresh(쿠키 기반) 후 1회 재시도
-    if (requiresAuth && response.status === 401) {
-      const newToken = await refreshAccessToken();
-      if (newToken) {
-        const retryHeaders: HeadersInit = {
-          ...(requestHeaders as Record<string, string>),
-          Authorization: `Bearer ${newToken}`,
-        };
-        response = await doFetch(retryHeaders);
-      }
+  // ✅ 401이면 refresh 후 1회 재시도 (공통 처리)
+  if (requiresAuth && response.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (!newToken) {
+      // ✅ refresh 실패 → 세션 만료로 간주
+      throw new AuthExpiredError();
     }
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const message =
-        errorData?.detail ||
-        errorData?.error?.message ||
-        errorData?.message ||
-        `HTTP error! status: ${response.status}`;
-      throw new Error(message);
-    }
-
-    if (response.status === 204) {
-      return {} as T;
-    }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    console.error("API 요청 실패:", error);
-    throw error;
+    const retryHeaders: HeadersInit = {
+      ...(requestHeaders as Record<string, string>),
+      Authorization: `Bearer ${newToken}`,
+    };
+    response = await doFetch(retryHeaders);
   }
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message =
+      errorData?.detail ||
+      errorData?.error?.message ||
+      errorData?.message ||
+      `HTTP error! status: ${response.status}`;
+    throw new Error(message);
+  }
+
+  if (response.status === 204) {
+    return {} as T;
+  }
+
+  return (await response.json()) as T;
 }
 
-async function requestFormData<T>(endpoint: string, formData: FormData, options: RequestOptions = {}): Promise<T> {
+/**
+ * API 요청(FormData)
+ * - Content-Type을 직접 세팅하지 말 것(boundary 자동 처리)
+ */
+async function requestFormData<T>(
+  endpoint: string,
+  formData: FormData,
+  options: RequestOptions = {},
+): Promise<T> {
   const { requiresAuth = true, headers = {}, ...restOptions } = options;
 
-  let requestHeaders: HeadersInit = {
-    ...headers,
-  };
+  let requestHeaders: HeadersInit = { ...headers };
 
   if (requiresAuth) {
     requestHeaders = await attachAccessToken(requestHeaders);
@@ -139,45 +162,41 @@ async function requestFormData<T>(endpoint: string, formData: FormData, options:
       credentials: "include",
     });
 
-  try {
-    let response = await doFetch(requestHeaders);
+  let response = await doFetch(requestHeaders);
 
-    if (requiresAuth && response.status === 401) {
-      const newToken = await refreshAccessToken();
-      if (newToken) {
-        const retryHeaders: HeadersInit = {
-          ...(requestHeaders as Record<string, string>),
-          Authorization: `Bearer ${newToken}`,
-        };
-        response = await doFetch(retryHeaders);
-      }
+  if (requiresAuth && response.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (!newToken) {
+      throw new AuthExpiredError();
     }
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const message =
-        errorData?.detail ||
-        errorData?.error?.message ||
-        errorData?.message ||
-        `HTTP error! status: ${response.status}`;
-      throw new Error(message);
-    }
-
-    if (response.status === 204) {
-      return {} as T;
-    }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    throw error;
+    const retryHeaders: HeadersInit = {
+      ...(requestHeaders as Record<string, string>),
+      Authorization: `Bearer ${newToken}`,
+    };
+    response = await doFetch(retryHeaders);
   }
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(
+      errorData.detail || `HTTP error! status: ${response.status}`,
+    );
+  }
+
+  if (response.status === 204) {
+    return {} as T;
+  }
+
+  return (await response.json()) as T;
 }
 
 /**
  * API 서비스 객체
  */
 export const api = {
-  get: <T>(endpoint: string, options?: RequestOptions) => request<T>(endpoint, { ...options, method: "GET" }),
+  get: <T>(endpoint: string, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: "GET" }),
 
   post: <T>(endpoint: string, data?: any, options?: RequestOptions) =>
     request<T>(endpoint, {
@@ -200,42 +219,28 @@ export const api = {
       body: data ? JSON.stringify(data) : undefined,
     }),
 
-  delete: <T>(endpoint: string, options?: RequestOptions) => request<T>(endpoint, { ...options, method: "DELETE" }),
+  delete: <T>(endpoint: string, options?: RequestOptions) =>
+    request<T>(endpoint, { ...options, method: "DELETE" }),
 
-  postFormData: <T>(endpoint: string, formData: FormData, options?: RequestOptions) =>
-    requestFormData<T>(endpoint, formData, options),
+  postFormData: <T>(
+    endpoint: string,
+    formData: FormData,
+    options?: RequestOptions,
+  ) => requestFormData<T>(endpoint, formData, options),
 };
 
 /**
- * 토큰 관리 함수 (백엔드 기준: refresh_token은 쿠키로만 관리)
+ * ✅ 토큰 관리(메모리 only)
+ * - refresh_token은 쿠키로만 관리됨
+ * - access_token은 메모리에만 저장됨
  */
 export const tokenManager = {
   setAccessToken: async (token: string) => {
-    try {
-      await AsyncStorage.setItem("access_token", token);
-    } catch (error) {
-      console.error("access_token 저장 실패:", error);
-      throw error;
-    }
+    inMemoryAccessToken = token;
   },
-
-  getAccessToken: async () => {
-    try {
-      return await AsyncStorage.getItem("access_token");
-    } catch (error) {
-      console.error("access_token 로드 실패:", error);
-      return null;
-    }
-  },
-
+  getAccessToken: async () => inMemoryAccessToken,
   clearTokens: async () => {
-    try {
-      // 과거 구현 흔적(refresh_token)까지 함께 정리
-      await AsyncStorage.multiRemove(["access_token", "refresh_token"]);
-    } catch (error) {
-      console.error("토큰 삭제 실패:", error);
-      throw error;
-    }
+    inMemoryAccessToken = null;
   },
 };
 

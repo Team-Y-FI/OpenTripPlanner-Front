@@ -79,8 +79,8 @@ export default function LoginScreen() {
     if (!ok) {
       Toast.show({
         type: "error",
-        text1: "카카오 로그인 미지원",
-        text2: "현재 백엔드 연동이 되어 있지 않습니다.",
+        text1: "카카오 로그인 실패",
+        text2: "잠시 후 다시 시도해주세요.",
         position: "top",
         visibilityTime: 2500,
       });

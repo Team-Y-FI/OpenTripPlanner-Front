@@ -32,11 +32,6 @@ export interface MessageResponse {
   message: string;
 }
 
-/**
- * Auth API (백엔드 기준)
- * - access_token: JSON 응답으로 전달
- * - refresh_token: HTTP-only 쿠키로만 관리
- */
 export const authService = {
   sendVerification: async (email: string): Promise<MessageResponse> => {
     return api.post<MessageResponse>(
@@ -47,52 +42,62 @@ export const authService = {
   },
 
   verifyCode: async (data: VerifyCodeRequest): Promise<MessageResponse> => {
-    return api.post<MessageResponse>(
-      "/auth/verify-code",
-      data,
-      { requiresAuth: false },
-    );
+    return api.post<MessageResponse>("/auth/verify-code", data, {
+      requiresAuth: false,
+    });
   },
 
   register: async (data: RegisterRequest): Promise<MessageResponse> => {
-    return api.post<MessageResponse>(
-      "/auth/register",
-      data,
-      { requiresAuth: false },
-    );
+    return api.post<MessageResponse>("/auth/register", data, {
+      requiresAuth: false,
+    });
   },
 
   login: async (data: LoginRequest): Promise<User> => {
+    const token = await api.post<TokenResponse>("/auth/login", data, {
+      requiresAuth: false,
+    });
+    await tokenManager.setAccessToken(token.access_token);
+    return api.get<User>("/users/me", { requiresAuth: true });
+  },
+
+  kakaoLogin: async (kakaoAccessToken: string): Promise<User> => {
     const token = await api.post<TokenResponse>(
-      "/auth/login",
-      data,
+      "/auth/kakao/token",
+      { access_token: kakaoAccessToken },
+      { requiresAuth: false },
+    );
+    await tokenManager.setAccessToken(token.access_token);
+    return api.get<User>("/users/me", { requiresAuth: true });
+  },
+
+  // ✅ redirect_uri 함께 전달
+  kakaoCallback: async (code: string, redirectUri?: string): Promise<User> => {
+    const qs = new URLSearchParams({ code });
+    if (redirectUri) qs.set("redirect_uri", redirectUri);
+
+    const token = await api.get<TokenResponse>(
+      `/auth/kakao/callback?${qs.toString()}`,
       { requiresAuth: false },
     );
 
     await tokenManager.setAccessToken(token.access_token);
-
-    // access token으로 현재 유저 조회
     return api.get<User>("/users/me", { requiresAuth: true });
   },
 
   refresh: async (): Promise<TokenResponse> => {
-    const token = await api.post<TokenResponse>(
-      "/auth/refresh",
-      undefined,
-      { requiresAuth: false },
-    );
-
+    const token = await api.post<TokenResponse>("/auth/refresh", undefined, {
+      requiresAuth: false,
+    });
     await tokenManager.setAccessToken(token.access_token);
     return token;
   },
 
   logout: async (): Promise<void> => {
     try {
-      await api.post<MessageResponse>(
-        "/auth/logout",
-        undefined,
-        { requiresAuth: true },
-      );
+      await api.post<MessageResponse>("/auth/logout", undefined, {
+        requiresAuth: true,
+      });
     } finally {
       await tokenManager.clearTokens();
     }
