@@ -71,6 +71,24 @@ function isTimeEndAfterStart(start: string, end: string): boolean {
   return eh > sh || (eh === sh && em >= sm);
 }
 
+// 서울특별시 경계 좌표 (남서·북동)
+const SEOUL_BOUNDS = {
+  south: 37.413,
+  north: 37.715,
+  west: 126.735,
+  east: 127.147,
+};
+
+// 좌표가 서울특별시 범위 내인지 확인
+function isWithinSeoul(lat: number, lng: number): boolean {
+  return (
+    lat >= SEOUL_BOUNDS.south &&
+    lat <= SEOUL_BOUNDS.north &&
+    lng >= SEOUL_BOUNDS.west &&
+    lng <= SEOUL_BOUNDS.east
+  );
+}
+
 function parseDate(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const d = new Date(s);
@@ -161,7 +179,6 @@ function isStartDateValid(startDate: string): boolean {
 export default function CourseWeb() {
   const router = useRouter();
   const { resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan, isCourseGenerating, setIsCourseGenerating, reportCourseGenerationComplete } = usePlaces();
-  const [duration, setDuration] = useState('');
   const [selectedMove, setSelectedMove] = useState('walkAndPublic');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
@@ -198,6 +215,7 @@ export default function CourseWeb() {
   const [modalShowResults, setModalShowResults] = useState(false);
   const [modalIsSearching, setModalIsSearching] = useState(false);
   const [reverseGeocoding, setReverseGeocoding] = useState(false);
+  const shouldMoveMapRef = useRef(false); // 검색 결과 선택 시에만 true (ref로 변경하여 불필요한 리렌더링 방지)
   const modalSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modalMapContainerRef = useRef<HTMLDivElement | null>(null);
   const modalMapInstance = useRef<any>(null);
@@ -228,7 +246,23 @@ export default function CourseWeb() {
   };
 
   const reverseGeocode = async (lat: number, lng: number) => {
-    const noAddressText = '??? ?? ? ????';
+    // 서울특별시 경계 체크
+    if (!isWithinSeoul(lat, lng)) {
+      Toast.show({
+        type: 'error',
+        text1: '알림',
+        text2: '서울특별시 지역만 선택할 수 있습니다.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+      return;
+    }
+
+    const noAddressText = '주소를 찾을 수 없습니다';
+    if (!window.kakao || !window.kakao.maps) {
+      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+      return;
+    }
     setReverseGeocoding(true);
     try {
       const res = await utilsService.reverseGeocode(lat, lng);
@@ -286,6 +320,7 @@ export default function CourseWeb() {
 
   const selectModalSearchResult = (result: SearchResult) => {
     const { lat, lng } = result.geometry.location;
+    shouldMoveMapRef.current = true; // 검색 결과 선택 시 지도 이동 필요
     setDraftPlace({
       lat,
       lng,
@@ -295,11 +330,6 @@ export default function CourseWeb() {
     setModalSearchQuery('');
     setModalSearchResults([]);
     setModalShowResults(false);
-    if (window.kakao && modalMapInstance.current) {
-      const moveLatLng = new window.kakao.maps.LatLng(lat, lng);
-      modalMapInstance.current.panTo(moveLatLng);
-      modalMapInstance.current.setLevel(3);
-    }
   };
 
   const setDraftFormField = <K extends keyof typeof draftForm>(key: K, value: typeof draftForm[K]) => {
@@ -456,7 +486,7 @@ export default function CourseWeb() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addFixedModalVisible]);
 
-  // 모달 지도: draftPlace 변경 시 마커 갱신 및 이동
+  // 모달 지도: draftPlace 변경 시 마커 갱신 (검색 결과 선택 시에만 지도 이동)
   useEffect(() => {
     if (!window.kakao || !modalMapInstance.current || !addFixedModalVisible) return;
     if (modalMarkerRef.current) {
@@ -469,8 +499,12 @@ export default function CourseWeb() {
         position: markerPosition,
         map: modalMapInstance.current,
       });
-      modalMapInstance.current.panTo(markerPosition);
-      modalMapInstance.current.setLevel(3);
+      // 검색 결과 선택 시에만 지도 이동 (지도 클릭 시에는 이동하지 않음)
+      if (shouldMoveMapRef.current) {
+        modalMapInstance.current.panTo(markerPosition);
+        modalMapInstance.current.setLevel(3);
+        shouldMoveMapRef.current = false;
+      }
     }
   }, [addFixedModalVisible, draftPlace]);
 
@@ -871,7 +905,8 @@ export default function CourseWeb() {
                 <Pressable
                   key={option.key}
                   style={[styles.optionButton, selectedMove === option.key && styles.optionButtonActive]}
-                  onPress={() => setSelectedMove(option.key)}>
+                  onPress={() => setSelectedMove(option.key)}
+                  disabled={isGenerating}>
                   <Text style={[styles.optionButtonText, selectedMove === option.key && styles.optionButtonTextActive]}>
                     {option.label}
                   </Text>
@@ -1094,9 +1129,9 @@ export default function CourseWeb() {
                   <Text style={styles.addFixedCancelButtonText}>취소</Text>
                 </Pressable>
                 <Pressable
-                  style={[styles.addFixedConfirmButton, !draftPlace && styles.addFixedConfirmButtonDisabled]}
+                  style={[styles.addFixedConfirmButton, (!draftPlace || !draftForm.startTime || !draftForm.endTime || !draftForm.date) && styles.addFixedConfirmButtonDisabled]}
                   onPress={confirmAddFixed}
-                  disabled={!draftPlace}
+                  disabled={!draftPlace || !draftForm.startTime || !draftForm.endTime || !draftForm.date}
                 >
                   <Text style={styles.addFixedConfirmButtonText}>확인</Text>
                 </Pressable>

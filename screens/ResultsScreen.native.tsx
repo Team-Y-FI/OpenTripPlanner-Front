@@ -106,19 +106,47 @@ const extractTravelInfo = (transit: string[]): { distance: string | null; durati
   let duration: string | null = null;
   let mode = 'walk';
 
+  let totalMinutes = 0;
+
   for (const t of transit) {
+    // 대기 시간 처리 (가장 먼저 체크)
+    const waitMatch = t.match(/대기\s*[:\s]*(\d+)\s*분/);
+    if (waitMatch) {
+      totalMinutes += parseInt(waitMatch[1]);
+      mode = 'wait';
+      continue;
+    }
+    // 도보 시간 추출
     const walkMatch = t.match(/도보\s*[:\s]*(\d+)\s*분/);
     if (walkMatch) {
       const minutes = parseInt(walkMatch[1]);
-      duration = `${minutes}분`;
+      totalMinutes += minutes;
       const km = (minutes / 60) * 4;
       distance = km >= 1 ? `${km.toFixed(1)}km` : `${(km * 1000).toFixed(0)}m`;
       mode = 'walk';
+      continue;
     }
+    // 승용차 이동 처리
+    const carMatch = t.match(/승용차\s*이동\s*[:\s]*(\d+)\s*분/);
+    if (carMatch) {
+      totalMinutes += parseInt(carMatch[1]);
+      mode = 'car';
+      continue;
+    }
+    // 버스/지하철 시간
     const busMatch = t.match(/버스|지하철/);
     if (busMatch) {
+      const transitMinutesMatch = t.match(/(\d+)\s*분/);
+      if (transitMinutesMatch) {
+        totalMinutes += parseInt(transitMinutesMatch[1]);
+      }
       mode = 'transit';
+      continue;
     }
+  }
+
+  if (totalMinutes > 0) {
+    duration = `${totalMinutes}분`;
   }
   return { distance, duration, mode };
 };
@@ -130,9 +158,14 @@ const splitTimeAndExtra = (timeStr: string): {
   extraLabel: string | null;
   extraColor: string | null;
 } => {
+  // 빈 문자열이나 undefined 처리
+  if (!timeStr || timeStr.trim() === '') {
+    return { startTime: '', endTime: null, extraLabel: null, extraColor: null };
+  }
+
   const extraMatch = timeStr.match(/\[(.+)\]\s*$/);
-  const base = timeStr.replace(/\s*\[.+\]\s*$/, '');
-  const [start, end] = base.split(' - ');
+  const base = timeStr.replace(/\s*\[.+\]\s*$/, '').trim();
+  const [start, end] = base.split(' - ').map(s => s?.trim());
   const extraRaw = extraMatch ? extraMatch[1] : null;
 
   if (!extraRaw) {
@@ -153,8 +186,8 @@ const splitTimeAndExtra = (timeStr: string): {
   };
 };
 
-// 이동 단계 파싱 (도보/버스/대기 등)
-type TransitStepType = 'walk' | 'bus' | 'subway' | 'wait' | 'other';
+// 이동 단계 파싱 (도보/버스/대기/승용차 등)
+type TransitStepType = 'walk' | 'bus' | 'subway' | 'wait' | 'car' | 'other';
 
 interface ParsedTransitStep {
   type: TransitStepType;
@@ -168,10 +201,17 @@ interface ParsedTransitStep {
 }
 
 const parseTransitStep = (raw: string): ParsedTransitStep => {
-  // 지연/정체 정보 추출 [정체 +2분]
+  // 지연/정체/서행 정보 추출 [정체 +2분] 또는 [🟡서행]
   const delayMatch = raw.match(/\[([^\]]*(?:지연|정체|서행)[^\]]*)\]\s*$/);
-  const cleanRaw = raw.replace(/\s*\[[^\]]*(?:지연|정체|서행)[^\]]*\]\s*$/, '').trim();
+  // 주차/도보 정보 추출 [주차/도보 +12분]
+  const parkingMatch = raw.match(/\[주차\/도보\s*\+(\d+)\s*분\]/);
+  
+  let cleanRaw = raw.replace(/\s*\[[^\]]*(?:지연|정체|서행)[^\]]*\]\s*$/, '').trim();
+  // 주차/도보 정보도 제거
+  cleanRaw = cleanRaw.replace(/\s*\[주차\/도보\s*\+\d+\s*분\]/g, '').trim();
+  
   const delayRaw = delayMatch ? delayMatch[1] : null;
+  const parkingRaw = parkingMatch ? `주차/도보 +${parkingMatch[1]}분` : null;
 
   let type: TransitStepType = 'other';
   let duration: string | null = null;
@@ -179,20 +219,28 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
   let fromStation: string | null = null;
   let toStation: string | null = null;
 
-  // 도보: "도보 : 2분" 또는 "도보 2분"
-  const walkMatch = cleanRaw.match(/도보\s*[:\s]*(\d+)\s*분/);
-  if (walkMatch) {
-    type = 'walk';
-    duration = `${walkMatch[1]}분`;
-  }
-  // 대기: "대기 : 3분" 또는 "대기 3분"
-  else if (cleanRaw.includes('대기')) {
+  // 대기: "대기 : 3분" 또는 "대기 3분" (가장 먼저 체크)
+  const waitMatch = cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/);
+  if (waitMatch) {
     type = 'wait';
-    const waitMatch = cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/);
-    if (waitMatch) duration = `${waitMatch[1]}분`;
+    duration = `${waitMatch[1]}분`;
+  }
+  // 도보: "도보 : 2분" 또는 "도보 2분"
+  else if (cleanRaw.match(/도보\s*[:\s]*(\d+)\s*분/)) {
+    const walkMatch = cleanRaw.match(/도보\s*[:\s]*(\d+)\s*분/);
+    if (walkMatch) {
+      type = 'walk';
+      duration = `${walkMatch[1]}분`;
+    }
+  }
+  // 승용차 이동: "승용차 이동 : 18분"
+  else if (cleanRaw.includes('승용차')) {
+    type = 'car';
+    const carMatch = cleanRaw.match(/승용차\s*이동\s*[:\s]*(\d+)\s*분/);
+    if (carMatch) duration = `${carMatch[1]}분`;
   }
   // 버스: "[버스][341, 3411, N31] : 잠실역.롯데월드 → 잠실진주아파트 : 4분"
-  else if (cleanRaw.includes('버스') || cleanRaw.match(/\d{2,4}번?/)) {
+  else if (cleanRaw.includes('버스') || (cleanRaw.match(/\d{2,4}번?/) && !cleanRaw.includes('대기'))) {
     type = 'bus';
     // 두 번째 대괄호에서 노선 번호 추출: [버스][341, 3411, N31]
     const routeMatch = cleanRaw.match(/\[버스\]\[([^\]]+)\]/);
@@ -238,13 +286,24 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
 
   // 지연 정보 색상
   let delayColor: string | null = null;
+  let delayText: string | null = null;
+  
   if (delayRaw) {
     if (delayRaw.includes('🔴') || delayRaw.includes('정체')) delayColor = '#dc2626';
     else if (delayRaw.includes('🟡') || delayRaw.includes('지연')) delayColor = '#f59e0b';
     else if (delayRaw.includes('🟢')) delayColor = '#16a34a';
     else delayColor = '#6b7280';
+    delayText = delayRaw.replace(/[🟢🟡🔴]/g, '').trim();
   }
-  const cleanedDelay = delayRaw ? delayRaw.replace(/[🟢🟡🔴]/g, '').trim() : null;
+  
+  // 주차/도보 정보가 있으면 지연 정보로 추가 (서행처럼 노란색으로 표시)
+  if (parkingRaw) {
+    delayText = delayText ? `${delayText} ${parkingRaw}` : parkingRaw;
+    // 기존 지연 색상이 없거나 회색이면 노란색으로 설정
+    if (!delayColor || delayColor === '#6b7280') {
+      delayColor = '#eab308'; // 서행과 동일한 노란색
+    }
+  }
 
   return {
     type,
@@ -252,7 +311,7 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
     routes,
     fromStation,
     toStation,
-    delayText: cleanedDelay,
+    delayText,
     delayColor,
     rawText: cleanRaw,
   };
@@ -633,9 +692,10 @@ export default function ResultsScreen() {
   // 모든 장소 좌표
   const allLocations = useMemo(() => {
     if (!currentDayData) return [];
-    const locations: Array<{ lat: number; lng: number; name: string; category: string }> = [];
+    const locations: Array<{ lat: number; lng: number; name: string; category: string; address?: string }> = [];
 
     timeline.forEach((item) => {
+      // 일반 장소: name으로 검색
       const routeItem = currentDayData.route.find((r) => r.name === item.name);
       if (routeItem) {
         locations.push({ lat: routeItem.lat, lng: routeItem.lng, name: item.name, category: item.category });
@@ -649,6 +709,23 @@ export default function ResultsScreen() {
       const accommodationItem = currentDayData.accommodations.find((a) => a.name === item.name);
       if (accommodationItem) {
         locations.push({ lat: accommodationItem.lat, lng: accommodationItem.lng, name: item.name, category: item.category });
+        return;
+      }
+      // 고정 일정: title로 검색 (route 배열에 고정 일정이 title 필드로 저장됨)
+      const fixedEventItem = currentDayData.route.find((r: any) => r.title === item.name);
+      if (fixedEventItem && fixedEventItem.lat && fixedEventItem.lng) {
+        const placeName = (fixedEventItem as any).place_name || (fixedEventItem as any).address || '';
+        // 고정일정의 마커 이름: title이 있으면 사용, 없거나 장소명과 같으면 '고정일정'으로 표시
+        const displayName = (fixedEventItem as any).title && (fixedEventItem as any).title !== placeName
+          ? (fixedEventItem as any).title
+          : '고정일정';
+        locations.push({
+          lat: fixedEventItem.lat,
+          lng: fixedEventItem.lng,
+          name: displayName,
+          category: item.category,
+          address: placeName,
+        });
       }
     });
 
@@ -853,7 +930,6 @@ export default function ResultsScreen() {
             onPress={() => {
               // 히스토리가 없으면 경고가 나지 않도록 메인 화면으로 이동
               // (expo-router v3 이상에서 router.canGoBack 지원)
-              // @ts-expect-error: canGoBack은 런타임에서 존재할 수 있음
               if (typeof router.canGoBack === 'function' && router.canGoBack()) {
                 router.back();
               } else {
@@ -864,7 +940,7 @@ export default function ResultsScreen() {
             <Ionicons name="chevron-back" size={24} color="#0f172a" />
           </Pressable>
           <View style={styles.headerInfo}>
-            <Text style={styles.headerTitle}>{planData.summary.region}여행</Text>
+            <Text style={styles.headerTitle}>{planData.summary.region} 코스 추천</Text>
             <Text style={styles.headerSubtitle}>
               {planData.summary.start_date} ~ {planData.summary.end_date}
             </Text>
@@ -1055,7 +1131,12 @@ export default function ResultsScreen() {
                       <View style={styles.travelContent}>
                         <View style={styles.travelBadge}>
                           <Ionicons
-                            name={travelInfo.mode === 'walk' ? 'walk' : 'bus'}
+                            name={
+                              travelInfo.mode === 'walk' ? 'walk' :
+                              travelInfo.mode === 'wait' ? 'time' :
+                              travelInfo.mode === 'car' ? 'car' :
+                              travelInfo.mode === 'transit' ? 'bus' : 'bus'
+                            }
                             size={14}
                             color="#6366f1"
                           />
@@ -1125,6 +1206,11 @@ export default function ResultsScreen() {
                             iconBg = '#ede9fe';
                             iconColor = '#7c3aed';
                             accentColor = '#7c3aed';
+                          } else if (step.type === 'car') {
+                            iconName = 'car';
+                            iconBg = '#fce7f3';
+                            iconColor = '#be185d';
+                            accentColor = '#be185d';
                           }
 
                           return (
@@ -1141,7 +1227,11 @@ export default function ResultsScreen() {
                               <View style={styles.transitStepRight}>
                                 <View style={styles.transitStepHeader}>
                                   <Text style={[styles.transitStepType, { color: accentColor }]}>
-                                    {step.type === 'walk' ? '도보' : step.type === 'bus' ? '버스' : step.type === 'subway' ? '지하철' : step.type === 'wait' ? '대기' : '이동'}
+                                    {step.type === 'walk' ? '도보' : 
+                                     step.type === 'bus' ? '버스' : 
+                                     step.type === 'subway' ? '지하철' : 
+                                     step.type === 'wait' ? '대기' : 
+                                     step.type === 'car' ? '승용차' : '이동'}
                                   </Text>
                                   {step.duration && (
                                     <Text style={styles.transitStepDuration}>{step.duration}</Text>
@@ -1257,15 +1347,30 @@ export default function ResultsScreen() {
                       {/* 장소명 */}
                       <Text style={[styles.placeName, isEditMode && styles.placeNameEdit]}>{item.name}</Text>
 
-                      {/* 카테고리 */}
-                      <View style={styles.placeMetaRow}>
-                        <View style={[styles.categoryBadge, { backgroundColor: categoryColors.bg }]}>
-                          <Ionicons name={categoryIcon as any} size={12} color={categoryColors.text} />
-                          <Text style={[styles.categoryText, { color: categoryColors.text }]}>
-                            {item.category}
-                          </Text>
+                      {/* 고정일정인 경우: 위치 태그와 고정일정 태그를 별도로 표시 */}
+                      {item.category === '고정일정' ? (
+                        <View style={styles.fixedEventTagsContainer}>
+                          {/* 위치 태그 */}
+                          {allLocations[idx]?.address && (
+                            <View style={styles.fixedEventLocationTag}>
+                              <Ionicons name="location" size={12} color="#64748b" />
+                              <Text style={styles.fixedEventLocationTagText} numberOfLines={1}>
+                                {allLocations[idx].address}
+                              </Text>
+                            </View>
+                          )}
                         </View>
-                      </View>
+                      ) : (
+                        /* 일반 카테고리 배지 */
+                        <View style={styles.placeMetaRow}>
+                          <View style={[styles.categoryBadge, { backgroundColor: categoryColors.bg }]}>
+                            <Ionicons name={categoryIcon as any} size={12} color={categoryColors.text} />
+                            <Text style={[styles.categoryText, { color: categoryColors.text }]}>
+                              {item.category}
+                            </Text>
+                          </View>
+                        </View>
+                      )}
 
                       {/* 상태 배지 (편집 모드가 아닐 때만 표시) */}
                       {!isEditMode && (item.population_level || (item.traffic_level && item.traffic_level !== '-')) && (
@@ -2057,6 +2162,57 @@ const styles = StyleSheet.create({
   categoryText: {
     fontSize: 11,
     fontWeight: '600',
+  },
+  fixedEventLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  fixedEventLocationText: {
+    fontSize: 12,
+    color: '#6366f1',
+    flex: 1,
+  },
+  fixedEventTagsContainer: {
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  fixedEventLocationTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  fixedEventLocationTagText: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '500',
+  },
+  fixedEventTypeTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  fixedEventTypeDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#64748b',
+  },
+  fixedEventTypeText: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '500',
   },
   statusRow: {
     flexDirection: 'row',

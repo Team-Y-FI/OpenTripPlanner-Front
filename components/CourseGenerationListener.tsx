@@ -13,7 +13,14 @@ export default function CourseGenerationListener() {
   const prevStatusRef = useRef<'idle' | 'success' | 'error'>('idle');
 
   useEffect(() => {
-    if (courseGenerationStatus === 'idle' || courseGenerationStatus === prevStatusRef.current) return;
+    // idle 상태일 때 prevStatusRef도 리셋하여 다음 생성 시 정상 동작하도록 함
+    if (courseGenerationStatus === 'idle') {
+      prevStatusRef.current = 'idle';
+      return;
+    }
+
+    // 이미 처리한 상태면 스킵
+    if (courseGenerationStatus === prevStatusRef.current) return;
     prevStatusRef.current = courseGenerationStatus;
 
     if (courseGenerationStatus === 'success') {

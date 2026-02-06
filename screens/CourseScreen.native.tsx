@@ -66,6 +66,24 @@ function isTimeEndAfterStart(start: string, end: string): boolean {
   return eh > sh || (eh === sh && em >= sm);
 }
 
+// 서울특별시 경계 좌표 (남서·북동)
+const SEOUL_BOUNDS = {
+  south: 37.413,
+  north: 37.715,
+  west: 126.735,
+  east: 127.147,
+};
+
+// 좌표가 서울특별시 범위 내인지 확인
+function isWithinSeoul(lat: number, lng: number): boolean {
+  return (
+    lat >= SEOUL_BOUNDS.south &&
+    lat <= SEOUL_BOUNDS.north &&
+    lng >= SEOUL_BOUNDS.west &&
+    lng <= SEOUL_BOUNDS.east
+  );
+}
+
 function parseDate(s: string): Date | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const d = new Date(s);
@@ -86,7 +104,6 @@ function isStartDateValid(startDate: string): boolean {
 export default function CourseScreen() {
   const router = useRouter();
   const { selectedPlaces, setSelectedPlaces, removePlace, resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan } = usePlaces();
-  const [duration, setDuration] = useState('');
   const [selectedMove, setSelectedMove] = useState('walk');
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -151,7 +168,23 @@ export default function CourseScreen() {
   };
 
   const reverseGeocode = async (lat: number, lng: number) => {
-    const noAddressText = '??? ?? ? ????';
+    // 서울특별시 경계 체크
+    if (!isWithinSeoul(lat, lng)) {
+      Toast.show({
+        type: 'error',
+        text1: '알림',
+        text2: '서울특별시 지역만 선택할 수 있습니다.',
+        position: 'top',
+        visibilityTime: 3000,
+      });
+      return;
+    }
+
+    const noAddressText = '주소를 찾을 수 없습니다';
+    if (!GOOGLE_PLACES_API_KEY) {
+      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+      return;
+    }
     setReverseGeocoding(true);
     try {
       const res = await utilsService.reverseGeocode(lat, lng);
@@ -404,13 +437,6 @@ export default function CourseScreen() {
         longitudeDelta: 0.02,
       }, 500);
     }
-  };
-
-  const getInitialRegion = () => {
-    if (selectedPlaces.length > 0 && selectedPlaces[0].lat && selectedPlaces[0].lng) {
-      return { latitude: selectedPlaces[0].lat, longitude: selectedPlaces[0].lng, latitudeDelta: 0.05, longitudeDelta: 0.05 };
-    }
-    return { latitude: 37.5665, longitude: 126.9780, latitudeDelta: 0.1, longitudeDelta: 0.1 };
   };
 
   const purposes = ['데이트', '혼자 시간', '친구들과', '가족 나들이', '사진 찍기', '맛집 위주'];
@@ -1374,9 +1400,9 @@ export default function CourseScreen() {
                 <Text style={styles.addFixedCancelButtonText}>취소</Text>
               </Pressable>
               <Pressable
-                style={[styles.addFixedConfirmButton, !draftPlace && styles.addFixedConfirmButtonDisabled]}
+                style={[styles.addFixedConfirmButton, (!draftPlace || !draftForm.startTime || !draftForm.endTime || !draftForm.date) && styles.addFixedConfirmButtonDisabled]}
                 onPress={confirmAddFixed}
-                disabled={!draftPlace}
+                disabled={!draftPlace || !draftForm.startTime || !draftForm.endTime || !draftForm.date}
               >
                 <Text style={styles.addFixedConfirmButtonText}>확인</Text>
               </Pressable>
