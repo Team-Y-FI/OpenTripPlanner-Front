@@ -848,7 +848,19 @@ export default function ResultsScreen() {
       <View style={styles.container}>
         {/* 헤더 */}
         <View style={styles.header}>
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
+          <Pressable
+            style={styles.backButton}
+            onPress={() => {
+              // 히스토리가 없으면 경고가 나지 않도록 메인 화면으로 이동
+              // (expo-router v3 이상에서 router.canGoBack 지원)
+              // @ts-expect-error: canGoBack은 런타임에서 존재할 수 있음
+              if (typeof router.canGoBack === 'function' && router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace('/');
+              }
+            }}
+          >
             <Ionicons name="chevron-back" size={24} color="#0f172a" />
           </Pressable>
           <View style={styles.headerInfo}>

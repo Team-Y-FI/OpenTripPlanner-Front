@@ -25,6 +25,7 @@ export interface CreateCourseRequest {
   last_day_end_time: string;                // "18:00"
   fixed_events: FixedEvent[];               // 고정 일정 배열
   transport_mode: 'walkAndPublic' | 'car';  // 이동수단
+  category: 'attraction' | 'culture' | 'shopping' | 'restaurant' | 'cafe'; 
 }
 
 // 장소 정보 타입
@@ -92,14 +93,29 @@ export interface SavedPlanListItem {
   title: string | null;
   region: string;
   date: string;
-  variants_summary?: {
-    [key: string]: string;
-  };
 }
 
 export interface GetSavedPlansResponse {
   items: SavedPlanListItem[];
   next_cursor: string | null;
+}
+
+// 저장된 플랜 상세 조회 응답 타입
+export interface SavedPlanDetailResponse {
+  saved_plan_id: string;
+  plan_id: string;
+  title: string | null;
+  region: string;
+  date: string;
+  summary: {
+    region: string;
+    duration_hours: number;
+    transport: string;
+    crowd_mode: string;
+  };
+  variants: {
+    [key: string]: DayPlan;
+  };
 }
 
 // 대체 장소 추천 요청 타입
@@ -162,6 +178,14 @@ export const planService = {
   getSavedPlans: async (limit?: number): Promise<GetSavedPlansResponse> => {
     const params = limit ? `?limit=${limit}` : '';
     return api.get<GetSavedPlansResponse>(`/records/plans${params}`, { requiresAuth: true });
+  },
+
+  /**
+   * 저장된 플랜 상세 조회
+   * GET /otp/records/plans/{saved_plan_id}
+   */
+  getSavedPlanDetail: async (savedPlanId: string): Promise<SavedPlanDetailResponse> => {
+    return api.get<SavedPlanDetailResponse>(`/records/plans/${savedPlanId}`, { requiresAuth: true });
   },
 
   /**
