@@ -20,4 +20,7 @@ export type {
   Place,
   TimelineItem,
   DayPlan,
+  SavedPlanListItem,
+  GetSavedPlansResponse,
+  SavedPlanDetailResponse,
 } from "./planService";
