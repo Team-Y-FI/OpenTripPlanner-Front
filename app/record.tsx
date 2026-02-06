@@ -1,13 +1,42 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Image, ActivityIndicator, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Toast from 'react-native-toast-message';
+import { API_URL, recordService, type SpotDetail } from '@/services';
 
 const { width } = Dimensions.get('window');
+const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
+
+const resolveStorageUrl = (url?: string | null) => {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith('/')) return `${STORAGE_BASE}${url}`;
+  return `${STORAGE_BASE}/${url}`;
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return '날짜 없음';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return value;
+  }
+};
 
 export default function RecordScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ spot_id?: string }>();
+  const spotId = params.spot_id;
+  const [spot, setSpot] = useState<SpotDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [memoDraft, setMemoDraft] = useState('');
+  const [isEditingMemo, setIsEditingMemo] = useState(false);
+  const [isSavingMemo, setIsSavingMemo] = useState(false);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -16,6 +45,66 @@ export default function RecordScreen() {
       router.replace('/records');
     }
   };
+
+  useEffect(() => {
+    if (!spotId) return;
+    setIsLoading(true);
+    recordService
+      .getSpot(String(spotId))
+      .then((data) => {
+        setSpot(data);
+      })
+      .catch((error) => {
+        console.error('기록 불러오기 실패:', error);
+        Toast.show({
+          type: 'error',
+          text1: '불러오기 실패',
+          text2: '기록을 불러오는 중 오류가 발생했습니다.',
+        });
+      })
+      .finally(() => setIsLoading(false));
+  }, [spotId]);
+
+  useEffect(() => {
+    if (!spot) return;
+    setMemoDraft(spot.memo || '');
+    setIsEditingMemo(false);
+  }, [spot?.spot_id, spot?.memo]);
+
+  const handleCancelMemo = () => {
+    if (!spot) return;
+    setMemoDraft(spot.memo || '');
+    setIsEditingMemo(false);
+  };
+
+  const handleSaveMemo = async () => {
+    if (!spot) return;
+    const cleaned = memoDraft.trim();
+    const nextMemo = cleaned.length ? cleaned : null;
+
+    setIsSavingMemo(true);
+    try {
+      await recordService.updateSpot(spot.spot_id, { memo: nextMemo });
+      setSpot({ ...spot, memo: nextMemo });
+      setIsEditingMemo(false);
+      Toast.show({
+        type: 'success',
+        text1: '메모 저장 완료',
+        text2: '메모가 업데이트되었습니다.',
+      });
+    } catch (error) {
+      console.error('메모 저장 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '저장 실패',
+        text2: '메모를 저장하는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsSavingMemo(false);
+    }
+  };
+
+  const heroUrl = spot ? resolveStorageUrl(spot.photos?.[0]?.url) : null;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -31,77 +120,121 @@ export default function RecordScreen() {
           </LinearGradient>
           <Text style={styles.headerTitle}>OpenTripPlanner</Text>
         </View>
-        <Pressable onPress={() => router.push('/records')}>
-          <Text style={styles.headerLink}>내 기록 전체 보기</Text>
-        </Pressable>
+        <View style={{ width: 40 }} />
       </View>
 
-      {/* 스팟 요약 */}
-      <View style={styles.summaryCard}>
-        <View style={styles.imagePlaceholder}>
-          <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.imageBg}>
-            <Text style={styles.imageText}>사진</Text>
-          </LinearGradient>
+      {isLoading ? (
+        <View style={styles.loadingState}>
+          <ActivityIndicator size="small" color="#6366f1" />
+          <Text style={styles.loadingText}>기록을 불러오는 중...</Text>
         </View>
-        <View style={styles.summaryInfo}>
-          <Text style={styles.summaryTag}>내 지도 스팟</Text>
-          <Text style={styles.summaryTitle}>마들렌 카페 홍대점</Text>
-          <Text style={styles.summaryAddress}>서울 마포구 양화로 00길 12</Text>
-          <Text style={styles.summaryDate}>2024-05-03 방문</Text>
-          <View style={styles.tags}>
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>데이트</Text>
-            </View>
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>브런치</Text>
-            </View>
-            <View style={styles.tag}>
-              <Text style={styles.tagText}>야경</Text>
-            </View>
-          </View>
+      ) : !spot ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateText}>기록을 찾을 수 없습니다</Text>
+          <Text style={styles.emptyStateSubtext}>다시 시도해주세요.</Text>
         </View>
-      </View>
-
-      {/* 메모 & 지도 */}
-      <View style={styles.row}>
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>메모</Text>
-          <Text style={styles.memoText}>
-            오늘 데이트로 방문했던 카페.{'\n'}
-            디저트가 맛있고, 창가 자리 뷰가 좋아서 다음에도 다시 오고 싶다.
-          </Text>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>지도에서 보기 (예시)</Text>
-          <View style={styles.mapPlaceholder}>
-            <LinearGradient colors={['#dbeafe', '#e0e7ff']} style={styles.mapBg}>
-              <Text style={styles.mapText}>지도 예시</Text>
-              <Text style={styles.mapSubtext}>스팟 위치와 과거에 실행한{'\n'}플랜을 겹쳐볼 수 있어요.</Text>
-            </LinearGradient>
-            <View style={styles.mapPin}>
-              <Text style={styles.mapPinText}>●</Text>
+      ) : (
+        <>
+          {/* 스팟 요약 */}
+          <View style={styles.summaryCard}>
+            <View style={styles.imagePlaceholder}>
+              {heroUrl ? (
+                <Image source={{ uri: heroUrl }} style={styles.imageBg} />
+              ) : (
+                <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.imageBg}>
+                  <Text style={styles.imageText}>사진</Text>
+                </LinearGradient>
+              )}
+            </View>
+            <View style={styles.summaryInfo}>
+              <Text style={styles.summaryTag}>내 지도 스팟</Text>
+              <Text style={styles.summaryTitle}>{spot.place.name}</Text>
+              <Text style={styles.summaryAddress}>{spot.place.address || '주소 없음'}</Text>
+              <Text style={styles.summaryDate}>{formatDate(spot.visited_at)} 방문</Text>
+              <View style={styles.tags}>
+                <View style={styles.tag}>
+                  <Text style={styles.tagText}>{spot.place.category || '기타'}</Text>
+                </View>
+              </View>
             </View>
           </View>
-        </View>
-      </View>
 
-      {/* 관련 플랜 */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>이 스팟이 포함된 여행 플랜</Text>
-          <Text style={styles.sectionSubtitle}>최근 1개 플랜 (예시)</Text>
-        </View>
-        <View style={styles.planCard}>
-          <View>
-            <Text style={styles.planTitle}>홍대 데이트 3시간 루트</Text>
-            <Text style={styles.planSubtitle}>카페 → 전시 → 야경 · 2024-05-03 생성</Text>
+          {/* 메모 */}
+          <View style={styles.section}>
+            <View style={styles.memoHeader}>
+              <Text style={styles.cardTitle}>메모</Text>
+              {isEditingMemo ? (
+                <View style={styles.memoActions}>
+                  <Pressable
+                    style={styles.memoActionButton}
+                    onPress={handleCancelMemo}
+                    disabled={isSavingMemo}>
+                    <Text style={styles.memoActionText}>취소</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.memoActionButton,
+                      styles.memoSaveButton,
+                      isSavingMemo && styles.memoActionButtonDisabled,
+                    ]}
+                    onPress={handleSaveMemo}
+                    disabled={isSavingMemo}>
+                    <Text style={[styles.memoActionText, styles.memoSaveText]}>
+                      {isSavingMemo ? '저장 중...' : '저장'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable onPress={() => setIsEditingMemo(true)}>
+                  <Text style={styles.memoEditText}>메모 수정</Text>
+                </Pressable>
+              )}
+            </View>
+            {isEditingMemo ? (
+              <>
+                <TextInput
+                  style={styles.memoInput}
+                  placeholder="메모를 입력해주세요"
+                  placeholderTextColor="#94a3b8"
+                  value={memoDraft}
+                  onChangeText={setMemoDraft}
+                  multiline
+                  textAlignVertical="top"
+                  maxLength={2000}
+                />
+                <Text style={styles.memoHint}>최대 2000자</Text>
+              </>
+            ) : (
+              <Text style={styles.memoText}>{spot.memo || '메모가 없습니다.'}</Text>
+            )}
           </View>
-          <Pressable style={styles.planButton} onPress={() => router.push('/(tabs)/results')}>
-            <Text style={styles.planButtonText}>플랜 다시 보기</Text>
-          </Pressable>
-        </View>
-      </View>
+
+          {/* 관련 플랜 */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>이 스팟이 포함된 여행 플랜</Text>
+              <Text style={styles.sectionSubtitle}>최근 {spot.related_plans?.length || 0}개</Text>
+            </View>
+            {spot.related_plans?.length ? (
+              spot.related_plans.map((plan) => (
+                <View key={plan.plan_id} style={styles.planCard}>
+                  <View>
+                    <Text style={styles.planTitle}>{plan.title || '저장된 플랜'}</Text>
+                    <Text style={styles.planSubtitle}>{plan.date || '날짜 없음'}</Text>
+                  </View>
+                  <Pressable style={styles.planButton} onPress={() => router.push('/(tabs)/results')}>
+                    <Text style={styles.planButtonText}>플랜 보기</Text>
+                  </Pressable>
+                </View>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateSubtext}>연결된 플랜이 없습니다.</Text>
+              </View>
+            )}
+          </View>
+        </>
+      )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -147,8 +280,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    boxShadow: '0 2px 4px rgba(99, 102, 241, 0.3)',
-    elevation: 3,
   },
   logoText: {
     color: '#ffffff',
@@ -160,10 +291,30 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1e293b',
   },
-  headerLink: {
+  loadingState: {
+    paddingVertical: 40,
+    alignItems: 'center',
+    gap: 10,
+  },
+  loadingText: {
     fontSize: 13,
-    color: '#6366f1',
+    color: '#94a3b8',
+  },
+  emptyState: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
     fontWeight: '600',
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#94a3b8',
+    textAlign: 'center',
   },
   summaryCard: {
     backgroundColor: '#ffffff',
@@ -186,7 +337,8 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   imageBg: {
-    flex: 1,
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -200,122 +352,116 @@ const styles = StyleSheet.create({
   },
   summaryTag: {
     fontSize: 12,
-    fontWeight: '700',
     color: '#6366f1',
+    fontWeight: '600',
     marginBottom: 6,
-    letterSpacing: 0.5,
   },
   summaryTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 8,
-    flexWrap: 'wrap',
-    flexShrink: 1,
+    marginBottom: 6,
   },
   summaryAddress: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#64748b',
     marginBottom: 4,
   },
   summaryDate: {
     fontSize: 13,
     color: '#94a3b8',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   tags: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
+    gap: 8,
   },
   tag: {
-    backgroundColor: '#6366f1',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
   },
   tagText: {
     fontSize: 12,
-    color: '#ffffff',
-    fontWeight: '700',
+    color: '#6366f1',
+    fontWeight: '600',
   },
-  row: {
-    padding: 20,
-    gap: 16,
-  },
-  card: {
+  section: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
+    marginHorizontal: 20,
+    marginBottom: 16,
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    borderRadius: 16,
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)',
+    elevation: 2,
   },
   cardTitle: {
     fontSize: 15,
     fontWeight: '600',
     color: '#0f172a',
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  memoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  memoActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  memoActionButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: '#f1f5f9',
+  },
+  memoActionButtonDisabled: {
+    opacity: 0.6,
+  },
+  memoActionText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  memoSaveButton: {
+    backgroundColor: '#6366f1',
+  },
+  memoSaveText: {
+    color: '#ffffff',
+  },
+  memoEditText: {
+    fontSize: 12,
+    color: '#6366f1',
+    fontWeight: '600',
+  },
+  memoInput: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 110,
+    fontSize: 14,
+    color: '#0f172a',
+  },
+  memoHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#94a3b8',
   },
   memoText: {
     fontSize: 14,
     color: '#475569',
-    lineHeight: 22,
-  },
-  mapPlaceholder: {
-    height: 180,
-    borderRadius: 16,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  mapBg: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748b',
-    marginBottom: 8,
-  },
-  mapSubtext: {
-    fontSize: 12,
-    color: '#64748b',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  mapPin: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    marginLeft: -14,
-    marginTop: -14,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#0f172a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapPinText: {
-    fontSize: 10,
-    color: '#ffffff',
-  },
-  section: {
-    padding: 20,
+    lineHeight: 20,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   sectionTitle: {
     fontSize: 15,
@@ -323,47 +469,37 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   sectionSubtitle: {
-    fontSize: 13,
-    color: '#64748b',
+    fontSize: 12,
+    color: '#94a3b8',
   },
   planCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 18,
-    flexDirection: 'row',
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 16,
+    flexDirection: width < 400 ? 'column' : 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-    borderLeftWidth: 4,
-    borderLeftColor: '#38bdf8',
+    alignItems: width < 400 ? 'flex-start' : 'center',
+    gap: 12,
+    marginBottom: 10,
   },
   planTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
-    marginBottom: 4,
   },
   planSubtitle: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#64748b',
+    marginTop: 4,
   },
   planButton: {
-    backgroundColor: '#0f172a',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 16,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
   planButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#ffffff',
     fontWeight: '600',
   },

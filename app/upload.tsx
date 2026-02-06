@@ -1,18 +1,22 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { usePlaces } from '@/contexts/PlacesContext';
 import * as ImagePicker from 'expo-image-picker';
-import { api } from '@/services/api';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { api, metaService, recordService, API_URL } from '@/services';
 import Toast from 'react-native-toast-message';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
 import FullScreenLoader from '@/components/FullScreenLoader';
 
 const { width } = Dimensions.get('window');
+
+const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
+
+const PICKER_MEDIA_TYPES: ImagePicker.MediaType[] = ['images'];
 
 interface ExifData {
   lat: number;
@@ -28,6 +32,27 @@ interface PlaceData {
   lng: number;
 }
 
+
+
+type UploadLimits = {
+  max_photos: number;
+  max_file_size_mb: number;
+  allowed_exts: string[];
+};
+
+type UploadAsset = {
+  uri: string;
+  name: string;
+  type: string;
+};
+
+const DEFAULT_LIMITS: UploadLimits = {
+  max_photos: 20,
+  max_file_size_mb: 10,
+  allowed_exts: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
+};
+
+const DEFAULT_PLACE_CATEGORIES = ["카페", "맛집", "전시", "공원", "야경", "쇼핑"];
 interface PhotoData {
   photo_id: string;
   file_name: string;
@@ -35,13 +60,54 @@ interface PhotoData {
   exif: ExifData | null;
   place: PlaceData | null;
   thumbnail_url: string | null;
-  selected: boolean;
+  memo?: string | null;
   editingPlace?: boolean; // 장소 수정 중인지 여부
 }
 
+const getAssetName = (asset: ImagePicker.ImagePickerAsset) =>
+  asset.fileName || asset.uri.split('/').pop() || 'image';
+
+const getAssetExt = (name: string) => name.split('.').pop()?.toLowerCase() || '';
+
+const isHeicAsset = (asset: ImagePicker.ImagePickerAsset, ext: string) => {
+  const mime = asset.mimeType?.toLowerCase() || '';
+  return ext === 'heic' || ext === 'heif' || mime.includes('heic') || mime.includes('heif');
+};
+
+const ensureFileNameWithExt = (name: string, ext: string) => {
+  if (/\.\w+$/.test(name)) return name;
+  const fallback = ext || 'jpg';
+  return `${name}.${fallback}`;
+};
+
+const prepareUploadAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<UploadAsset> => {
+  const rawName = getAssetName(asset);
+  const ext = getAssetExt(rawName);
+  const mimeType = asset.mimeType || (ext ? `image/${ext}` : 'image/jpeg');
+
+  if (isHeicAsset(asset, ext) && Platform.OS !== 'web') {
+    const result = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      [],
+      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+    );
+    const jpegName = rawName.replace(/\.(heic|heif)$/i, '.jpg');
+    return {
+      uri: result.uri,
+      name: ensureFileNameWithExt(jpegName, 'jpg'),
+      type: 'image/jpeg',
+    };
+  }
+
+  return {
+    uri: asset.uri,
+    name: ensureFileNameWithExt(rawName, ext),
+    type: mimeType,
+  };
+};
+
 export default function UploadScreen() {
   const router = useRouter();
-  const { setSelectedPlaces } = usePlaces();
   const { user } = useAuth();
   const { startGlobalLoading, endGlobalLoading } = useSession();
   const [modalVisible, setModalVisible] = useState(false);
@@ -49,8 +115,24 @@ export default function UploadScreen() {
   const [placeName, setPlaceName] = useState('');
   const [placeAddress, setPlaceAddress] = useState('');
   const [placeCategory, setPlaceCategory] = useState('');
+  const [placeMemo, setPlaceMemo] = useState('');
   const [photos, setPhotos] = useState<PhotoData[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [limits, setLimits] = useState<UploadLimits>(DEFAULT_LIMITS);
+  const [placeCategories, setPlaceCategories] = useState<string[]>(DEFAULT_PLACE_CATEGORIES);
+  const [uploadId, setUploadId] = useState<string | null>(null);
+
+  useEffect(() => {
+    metaService
+      .getOptions()
+      .then((opts) => {
+        if (opts.place_categories?.length) {
+          setPlaceCategories(opts.place_categories.map((o) => o.label));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -73,10 +155,10 @@ export default function UploadScreen() {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: PICKER_MEDIA_TYPES,
         allowsMultipleSelection: true,
         quality: 0.8,
-        selectionLimit: 20 - photos.length, // 최대 20장 제한
+        selectionLimit: Math.max(0, limits.max_photos - photos.length), // 최대 20장 제한
       });
 
       if (!result.canceled && result.assets.length > 0) {
@@ -107,26 +189,77 @@ export default function UploadScreen() {
     startGlobalLoading();
 
     try {
-      const formData = new FormData();
-      
-      // FormData에 이미지 추가
-      assets.forEach((asset) => {
-        const uri = asset.uri;
-        const filename = uri.split('/').pop() || 'image.jpg';
-        const match = /\.(\w+)$/.exec(filename);
-        const type = match ? `image/${match[1]}` : 'image/jpeg';
-        
-        formData.append('files', {
-          uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
-          name: filename,
-          type: type,
-        } as any);
+      const allowedExts = new Set(limits.allowed_exts.map((ext) => ext.toLowerCase()));
+      const maxBytes = limits.max_file_size_mb * 1024 * 1024;
+
+      const invalidExts: string[] = [];
+      const invalidSizes: string[] = [];
+
+      const validAssets = assets.filter((asset) => {
+        const name = getAssetName(asset);
+        const ext = getAssetExt(name);
+        const allowHeic = isHeicAsset(asset, ext);
+
+        if (ext && !allowedExts.has(ext) && !allowHeic) {
+          invalidExts.push(name);
+          return false;
+        }
+
+        const size = (asset as any).fileSize;
+        if (typeof size === 'number' && size > maxBytes) {
+          invalidSizes.push(name);
+          return false;
+        }
+
+        return true;
       });
+
+      if (invalidExts.length || invalidSizes.length) {
+        const messages: string[] = [];
+        if (invalidExts.length) {
+          messages.push(`지원하지 않는 확장자: ${invalidExts.slice(0, 3).join(', ')}`);
+        }
+        if (invalidSizes.length) {
+          messages.push(`용량 초과: ${invalidSizes.slice(0, 3).join(', ')}`);
+        }
+        Toast.show({
+          type: 'error',
+          text1: '업로드 제한',
+          text2: messages.join(' / '),
+        });
+      }
+
+      if (validAssets.length === 0) {
+        return;
+      }
+
+      const formData = new FormData();
+
+      // FormData에 이미지 추가
+      const preparedAssets = await Promise.all(validAssets.map(prepareUploadAsset));
+      for (const asset of preparedAssets) {
+        const uri = asset.uri;
+        const filename = asset.name || 'image.jpg';
+        const type = asset.type || 'image/jpeg';
+
+        if (Platform.OS === 'web') {
+          const resp = await fetch(uri);
+          const blob = await resp.blob();
+          const file = new File([blob], filename, { type });
+          formData.append('files', file);
+        } else {
+          formData.append('files', {
+            uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+            name: filename,
+            type: type,
+          } as any);
+        }
+      }
 
       // 백엔드 API 호출
       const response = await api.postFormData<{
         upload_id: string;
-        limits: { max_photos: number };
+        limits: { max_photos: number; max_file_size_mb: number; allowed_exts: string[] };
         photos: Array<{
           photo_id: string;
           file_name: string;
@@ -139,13 +272,20 @@ export default function UploadScreen() {
         requiresAuth: true,
       });
 
+      setLimits({
+        max_photos: response.limits?.max_photos ?? DEFAULT_LIMITS.max_photos,
+        max_file_size_mb: response.limits?.max_file_size_mb ?? DEFAULT_LIMITS.max_file_size_mb,
+        allowed_exts: response.limits?.allowed_exts ?? DEFAULT_LIMITS.allowed_exts,
+      });
+
       // 업로드된 사진들을 상태에 추가
       const newPhotos: PhotoData[] = response.photos.map((photo) => ({
         ...photo,
-        selected: false,
+        thumbnail_url: photo.thumbnail_url ? `${STORAGE_BASE}${photo.thumbnail_url}` : null,
       }));
 
-      setPhotos((prev) => [...prev, ...newPhotos]);
+      setUploadId(response.upload_id);
+      setPhotos(newPhotos);
 
       Toast.show({
         type: 'success',
@@ -165,39 +305,70 @@ export default function UploadScreen() {
     }
   };
 
-  const togglePhotoSelection = (photoId: string) => {
-    setPhotos((prev) =>
-      prev.map((photo) =>
-        photo.photo_id === photoId
-          ? { ...photo, selected: !photo.selected }
-          : photo
-      )
-    );
-  };
-
-  const handleCreateCourse = () => {
-    const selected = photos
-      .filter((photo) => photo.selected && photo.place)
-      .map((photo) => ({
-        id: photo.photo_id,
-        filename: photo.file_name,
-        placeName: photo.place!.name,
-        placeAddress: photo.place!.address || '',
-        category: photo.place!.category || '',
-        timestamp: photo.exif?.taken_at || '',
-      }));
-
-    if (selected.length === 0) {
+  const handleRegisterSpots = async () => {
+    if (!uploadId || photos.length === 0) {
       Toast.show({
         type: 'info',
-        text1: '선택된 항목 없음',
-        text2: '코스를 만들려면 장소가 인식된 사진을 선택해주세요.',
+        text1: '등록할 사진 없음',
+        text2: '먼저 사진을 업로드해주세요.',
       });
       return;
     }
 
-    setSelectedPlaces(selected);
-    router.push('/course');
+    if (photos.some((p) => p.status !== 'recognized' || !p.place)) {
+      Toast.show({
+        type: 'error',
+        text1: '장소 입력 필요',
+        text2: '모든 사진의 장소 입력을 완료해주세요.',
+      });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const spots = photos.map((photo) => {
+      const memo = photo.memo?.trim();
+      return {
+        photo_id: photo.photo_id,
+        visited_at: photo.exif?.taken_at || nowIso,
+        place: {
+          name: photo.place!.name,
+          address: photo.place!.address || null,
+          category: photo.place!.category || '기타',
+          lat: photo.place!.lat,
+          lng: photo.place!.lng,
+        },
+        memo: memo || null,
+      };
+    });
+
+    setIsRegistering(true);
+    startGlobalLoading();
+    try {
+      await recordService.createSpotsFromUpload({
+        upload_id: uploadId,
+        spots,
+      });
+
+      Toast.show({
+        type: 'success',
+        text1: '장소 등록 완료',
+        text2: '기록 탭에서 확인할 수 있습니다.',
+      });
+
+      setPhotos([]);
+      setUploadId(null);
+      router.replace('/records');
+    } catch (error: any) {
+      console.error('장소 등록 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '등록 실패',
+        text2: error.message || '장소 등록 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsRegistering(false);
+      endGlobalLoading();
+    }
   };
 
   const openPlaceModal = (photoId: string) => {
@@ -207,6 +378,7 @@ export default function UploadScreen() {
       setPlaceName(photo.place?.name || '');
       setPlaceAddress(photo.place?.address || '');
       setPlaceCategory(photo.place?.category || '');
+      setPlaceMemo(photo.memo || '');
       setModalVisible(true);
     }
   };
@@ -215,6 +387,11 @@ export default function UploadScreen() {
     if (!editingPhotoId || !placeName) {
       return;
     }
+
+    const target = photos.find((p) => p.photo_id === editingPhotoId);
+    const lat = target?.exif?.lat ?? null;
+    const lng = target?.exif?.lng ?? null;
+    const memoValue = placeMemo.trim();
 
     startGlobalLoading();
 
@@ -230,8 +407,8 @@ export default function UploadScreen() {
           name: placeName,
           address: placeAddress || null,
           category: placeCategory || null,
-          lat: photos.find((p) => p.photo_id === editingPhotoId)?.exif?.lat || null,
-          lng: photos.find((p) => p.photo_id === editingPhotoId)?.exif?.lng || null,
+          lat,
+          lng,
         },
         { requiresAuth: true }
       );
@@ -244,6 +421,8 @@ export default function UploadScreen() {
                 ...photo,
                 place: response.place,
                 status: 'recognized' as const,
+                memo: memoValue ? memoValue : null,
+                thumbnail_url: response.thumbnail_url ? `${STORAGE_BASE}${response.thumbnail_url}` : photo.thumbnail_url,
               }
             : photo
         )
@@ -254,6 +433,7 @@ export default function UploadScreen() {
       setPlaceName('');
       setPlaceAddress('');
       setPlaceCategory('');
+      setPlaceMemo('');
 
       Toast.show({
         type: 'success',
@@ -286,6 +466,9 @@ export default function UploadScreen() {
       return dateStr;
     }
   };
+
+  const hasIncompletePlaces = photos.some((p) => p.status !== 'recognized' || !p.place);
+  const canRegister = !!uploadId && photos.length > 0 && !hasIncompletePlaces && !isUploading && !isRegistering;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -331,10 +514,12 @@ export default function UploadScreen() {
           <Pressable 
             style={styles.uploadButton}
             onPress={handlePickImages}
-            disabled={isUploading || photos.length >= 20}>
+            disabled={isUploading || photos.length >= limits.max_photos}>
             <Text style={styles.uploadButtonText}>파일 선택</Text>
           </Pressable>
-          <Text style={styles.uploadNote}>최대 20장 · JPEG / PNG · EXIF 위치 정보 자동 분석</Text>
+          <Text style={styles.uploadNote}>
+            최대 {limits.max_photos}장 · {limits.max_file_size_mb}MB · {limits.allowed_exts.join(' / ').toUpperCase()}
+          </Text>
         </LinearGradient>
       </View>
 
@@ -342,7 +527,7 @@ export default function UploadScreen() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>업로드된 사진 ({photos.length})</Text>
-          <Text style={styles.sectionSubtitle}>선택한 장소로 코스 생성</Text>
+          <Text style={styles.sectionSubtitle}>선택한 장소로 기록 생성</Text>
         </View>
 
         {photos.length === 0 ? (
@@ -359,21 +544,6 @@ export default function UploadScreen() {
                 photo.status === 'recognized' && styles.photoCardSuccess,
                 photo.status === 'needs_manual' && styles.photoCardGray,
               ]}>
-              <Pressable 
-                style={styles.checkbox}
-                onPress={() => togglePhotoSelection(photo.photo_id)}
-                disabled={!photo.place}>
-                <View style={[
-                  styles.checkboxBox,
-                  photo.selected && styles.checkboxBoxChecked,
-                  !photo.place && styles.checkboxBoxDisabled,
-                ]}>
-                  {photo.selected && (
-                    <Ionicons name="checkmark" size={16} color="#ffffff" />
-                  )}
-                </View>
-              </Pressable>
-              
               <View style={styles.photoThumbnail}>
                 {photo.thumbnail_url ? (
                   <Image 
@@ -414,6 +584,11 @@ export default function UploadScreen() {
                     {photo.place.category && (
                       <Text style={styles.photoCategory}>카테고리: {photo.place.category}</Text>
                     )}
+                    <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
+                      <Text style={styles.photoLink}>
+                        {photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정'}
+                      </Text>
+                    </Pressable>
                   </>
                 ) : (
                   <>
@@ -450,12 +625,12 @@ export default function UploadScreen() {
         <Pressable 
           style={[
             styles.actionButtonPrimary,
-            photos.filter(p => p.selected).length === 0 && styles.actionButtonDisabled
+            !canRegister && styles.actionButtonDisabled
           ]}
-          onPress={handleCreateCourse}
-          disabled={photos.filter(p => p.selected).length === 0}>
+          onPress={handleRegisterSpots}
+          disabled={!canRegister}>
           <LinearGradient
-            colors={photos.filter(p => p.selected).length > 0 
+            colors={canRegister
               ? ['#6366f1', '#38bdf8'] 
               : ['#cbd5e1', '#cbd5e1']}
             style={styles.actionButtonGradient}
@@ -463,11 +638,11 @@ export default function UploadScreen() {
             end={{ x: 1, y: 0 }}>
             <View style={styles.actionButtonContent}>
               <View style={styles.actionButtonTextWrapper}>
-                <Text style={styles.actionButtonPrimaryText}>이 기록들로 코스 만들기</Text>
-                {photos.filter(p => p.selected).length > 0 && (
+                <Text style={styles.actionButtonPrimaryText}>장소 등록하기</Text>
+                {photos.length > 0 && (
                   <View style={styles.actionButtonBadge}>
                     <Text style={styles.actionButtonBadgeText}>
-                      {photos.filter(p => p.selected).length}개 선택
+                      {photos.length}개
                     </Text>
                   </View>
                 )}
@@ -478,7 +653,7 @@ export default function UploadScreen() {
         </Pressable>
         
         <Pressable style={styles.actionButton} onPress={() => router.push('/records')}>
-          <Text style={styles.actionButtonText}>먼저 기록만 쌓기</Text>
+          <Text style={styles.actionButtonText}>내 기록 보기</Text>
         </Pressable>
       </View>
       </ScrollView>
@@ -498,12 +673,22 @@ export default function UploadScreen() {
               setPlaceName('');
               setPlaceAddress('');
               setPlaceCategory('');
+              setPlaceMemo('');
             }}
           />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>장소 정보 입력</Text>
-              <Pressable onPress={() => setModalVisible(false)} style={styles.modalCloseButton}>
+              <Pressable
+                onPress={() => {
+                  setModalVisible(false);
+                  setEditingPhotoId(null);
+                  setPlaceName('');
+                  setPlaceAddress('');
+                  setPlaceCategory('');
+                  setPlaceMemo('');
+                }}
+                style={styles.modalCloseButton}>
                 <Ionicons name="close" size={24} color="#64748b" />
               </Pressable>
             </View>
@@ -517,7 +702,7 @@ export default function UploadScreen() {
                 <Text style={styles.inputLabel}>장소 이름 *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="예: 마들렌 카페 홍대점"
+                  placeholder="예) 망원동 카페 라떼"
                   placeholderTextColor="#94a3b8"
                   value={placeName}
                   onChangeText={setPlaceName}
@@ -528,7 +713,7 @@ export default function UploadScreen() {
                 <Text style={styles.inputLabel}>주소</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="예: 서울시 마포구 홍익로"
+                  placeholder="예) 서울 마포구 독막로 12"
                   placeholderTextColor="#94a3b8"
                   value={placeAddress}
                   onChangeText={setPlaceAddress}
@@ -538,7 +723,7 @@ export default function UploadScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>카테고리</Text>
                 <View style={styles.categoryButtons}>
-                  {['카페', '음식점', '전시', '공원', '쇼핑', '기타'].map((category) => (
+                  {placeCategories.map((category) => (
                     <Pressable
                       key={category}
                       style={[
@@ -557,6 +742,21 @@ export default function UploadScreen() {
                   ))}
                 </View>
               </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>메모</Text>
+                <TextInput
+                  style={[styles.input, styles.memoInput]}
+                  placeholder="장소에 대한 메모를 남겨주세요"
+                  placeholderTextColor="#94a3b8"
+                  value={placeMemo}
+                  onChangeText={setPlaceMemo}
+                  multiline
+                  textAlignVertical="top"
+                  maxLength={2000}
+                />
+                <Text style={styles.memoHint}>최대 2000자</Text>
+              </View>
             </ScrollView>
 
             <View style={styles.modalFooter}>
@@ -568,6 +768,7 @@ export default function UploadScreen() {
                   setPlaceName('');
                   setPlaceAddress('');
                   setPlaceCategory('');
+                  setPlaceMemo('');
                 }}>
                 <Text style={styles.modalCancelButtonText}>취소</Text>
               </Pressable>
@@ -761,27 +962,6 @@ const styles = StyleSheet.create({
     alignItems: width < 400 ? 'flex-start' : 'center',
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
     elevation: 3,
-  },
-  checkbox: {
-    marginRight: 4,
-  },
-  checkboxBox: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#cbd5e1',
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxBoxChecked: {
-    backgroundColor: '#6366f1',
-    borderColor: '#6366f1',
-  },
-  checkboxBoxDisabled: {
-    backgroundColor: '#f1f5f9',
-    borderColor: '#e2e8f0',
   },
   photoCardSuccess: {
     backgroundColor: '#ffffff',
@@ -1060,6 +1240,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#0f172a',
   },
+  memoInput: {
+    minHeight: 110,
+    textAlignVertical: 'top',
+  },
+  memoHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#94a3b8',
+  },
   categoryButtons: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1124,3 +1313,4 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 });
+

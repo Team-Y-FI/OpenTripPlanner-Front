@@ -6,7 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlaces } from '@/contexts/PlacesContext';
-import { planService, CreateCourseRequest, FixedEvent } from '@/services';
+import { planService, CreateCourseRequest, FixedEvent, utilsService } from '@/services';
 
 // Android에서 LayoutAnimation 활성화
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -228,29 +228,20 @@ export default function CourseWeb() {
   };
 
   const reverseGeocode = async (lat: number, lng: number) => {
-    const noAddressText = '주소를 찾을 수 없습니다';
-    if (!window.kakao || !window.kakao.maps) {
-      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-      return;
-    }
+    const noAddressText = '??? ?? ? ????';
     setReverseGeocoding(true);
     try {
-      const geocoder = new window.kakao.maps.services.Geocoder();
-      geocoder.coord2Address(lng, lat, (result: any, status: any) => {
-        setReverseGeocoding(false);
-        if (status === window.kakao.maps.services.Status.OK && result[0]) {
-          const addr = result[0].road_address?.address_name || result[0].address?.address_name || '';
-          const placeName = addr || noAddressText;
-          setDraftPlace({ lat, lng, placeName, address: addr });
-        } else {
-          setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-        }
-      });
-    } catch {
+      const res = await utilsService.reverseGeocode(lat, lng);
+      const addr = res.road_address ?? res.address ?? '';
+      setDraftPlace({ lat, lng, placeName: addr || noAddressText, address: addr });
+    } catch (err) {
+      console.warn('????? ??:', err);
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+    } finally {
       setReverseGeocoding(false);
     }
   };
+
 
   const modalSearchPlaces = async (query: string) => {
     if (!query.trim() || !window.kakao || !window.kakao.maps) {
