@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { usePlaces } from '@/contexts/PlacesContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
 import { useNetwork } from '@/contexts/NetworkContext';
+import { planService, SavedPlanListItem, SavedPlanDetailResponse, CreateCourseResponse } from '@/services';
 import Toast from 'react-native-toast-message';
 import ConfirmModal from '@/components/ConfirmModal';
 import FullScreenLoader from '@/components/FullScreenLoader';
@@ -15,56 +16,135 @@ const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { clearPlaces, isCourseGenerating } = usePlaces();
+  const { clearPlaces, isCourseGenerating, courseGenerationStatus, clearCourseGenerationStatus, lastGeneratedPlan } = usePlaces();
   const { user, logout } = useAuth();
   const { startGlobalLoading, endGlobalLoading } = useSession();
-  const { isOnline } = useNetwork();
+  const { isOnline: _isOnline } = useNetwork();
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   
   // 로딩 상태 관리 - 데이터를 불러올 때 사용
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [userPlansCount, setUserPlansCount] = useState(0);
+  const [recentPlan, setRecentPlan] = useState<SavedPlanListItem | null>(null);
+  const [recentCourseDetail, setRecentCourseDetail] = useState<SavedPlanDetailResponse | null>(null);
+  const [pulseAnim] = useState(new Animated.Value(1));
+  const [selectedDay, setSelectedDay] = useState<string | null>(null); // 선택된 일자 (day1, day2 등)
 
+  // 방금 생성된 플랜 (저장 전이라도 바로 표시)
+  const generatedPlan = lastGeneratedPlan as CreateCourseResponse | null;
+  // 표시할 코스: 생성 중이 아닐 때, 생성된 플랜 > 저장된 플랜
+  const displayCourse = isCourseGenerating ? null : (generatedPlan || recentCourseDetail);
+  const hasDisplayData = !!displayCourse;
+
+  // 펄스 애니메이션 효과
   useEffect(() => {
-    // 화면이 나타날 때 사용자 데이터를 불러오는 함수
-    loadUserData();
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
   }, []);
+
+  // 화면 포커스 시 데이터 새로고침 (코스 생성 중에는 스킵)
+  useFocusEffect(
+    useCallback(() => {
+      if (user && !isCourseGenerating) {
+        loadUserData();
+      }
+    }, [user, isCourseGenerating])
+  );
+
+  // 코스 생성 완료 시 데이터 새로고침
+  const prevGeneratingRef = useRef(false);
+  useEffect(() => {
+    if (courseGenerationStatus === 'success' && user) {
+      setSelectedDay(null);
+      loadUserData();
+      clearCourseGenerationStatus();
+    }
+    // isCourseGenerating 전환도 감지 (fallback)
+    if (prevGeneratingRef.current && !isCourseGenerating && user) {
+      setTimeout(() => loadUserData(), 800);
+    }
+    prevGeneratingRef.current = isCourseGenerating;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseGenerationStatus, isCourseGenerating, user]);
+
+  // 표시할 코스가 변경되면 첫 번째 일자를 기본 선택
+  useEffect(() => {
+    const course = isCourseGenerating ? null : (generatedPlan || recentCourseDetail);
+    if (course?.variants) {
+      const dayVariants = Object.entries(course.variants).filter(
+        (entry) => Array.isArray(entry[1]?.route)
+      );
+      if (dayVariants.length > 0) {
+        setSelectedDay(dayVariants[0][0]);
+      }
+    }
+  }, [lastGeneratedPlan, generatedPlan, recentCourseDetail, isCourseGenerating]);
 
   /**
    * 사용자 데이터를 불러오는 함수
-   * 실제로는 API를 호출해서 데이터를 가져옴
+   * 저장된 플랜 목록을 API에서 가져옴
    */
   const loadUserData = async () => {
-    // 로딩 시작
-    setIsLoadingData(true);
-    startGlobalLoading();
-    
+    if (!user) {
+      setRecentPlan(null);
+      setUserPlansCount(0);
+      return;
+    }
+
+    // 코스 생성 중이거나 이미 생성된 플랜이 있으면 로딩 UI 불필요
+    const showLoading = !isCourseGenerating && !lastGeneratedPlan;
+    if (showLoading) {
+      setIsLoadingData(true);
+      startGlobalLoading();
+    }
+
     try {
-      // 여기서 실제 API 호출
-      // 예시: const response = await api.get('/plans');
-      // 실제로는 아래와 같이 사용:
-      // const response = await api.get('/records/plans');
-      // setUserPlansCount(response.items?.length || 0);
-      
-      // 예시를 위해 1초 후에 데이터를 불러온 것처럼 처리
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // 실제 데이터로 교체 필요
-      setUserPlansCount(0); // 예시: API에서 받은 데이터
-      
+      // 저장된 플랜 목록 조회 (최근 5개)
+      const response = await planService.getSavedPlans(5);
+      const plans = response.items || [];
+
+      setUserPlansCount(plans.length);
+
+      // 가장 최근 플랜 설정
+      if (plans.length > 0) {
+        setRecentPlan(plans[0]);
+
+        // saved_plan_id로 상세 코스 정보 조회
+        try {
+          const detail = await planService.getSavedPlanDetail(plans[0].saved_plan_id);
+          setRecentCourseDetail(detail);
+        } catch {
+          setRecentCourseDetail(null);
+        }
+      } else {
+        setRecentPlan(null);
+        setRecentCourseDetail(null);
+      }
+
     } catch (error) {
       console.error('데이터 로딩 실패:', error);
-      Toast.show({
-        type: 'error',
-        text1: '데이터 로딩 실패',
-        text2: isOnline ? '다시 시도해주세요.' : '오프라인 상태입니다. 인터넷 연결을 확인해주세요.',
-        position: 'top',
-        visibilityTime: 3000,
-      });
+      setRecentPlan(null);
+      setRecentCourseDetail(null);
+      setUserPlansCount(0);
     } finally {
-      // 로딩 종료 (성공/실패 관계없이 항상 실행)
       setIsLoadingData(false);
-      endGlobalLoading();
+      if (showLoading) {
+        endGlobalLoading();
+      }
     }
   };
 
@@ -126,22 +206,14 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* 코스 생성 중일 때 상단 알림 */}
-      {isCourseGenerating && (
-        <View style={styles.generatingBanner}>
-          <Text style={styles.generatingBannerText}>실시간 코스 생성 중...</Text>
-          <Text style={styles.generatingBannerSubtext}>완료되면 알려드릴게요</Text>
-        </View>
-      )}
-
       {/* 히어로 섹션 */}
       <View style={styles.hero}>
         <View style={styles.heroText}>
           <Text style={styles.tagline}>여행 플랜 · 동선 최적화</Text>
           <Text style={styles.title}>사진 한 장으로 시작하는{'\n'}나만의 동선 플래너</Text>
           <Text style={styles.description}>
-            사진 업로드로 장소를 자동 인식하고, 시간·예산·교통수단만 입력하면{'\n'}
-            혼잡도와 교통까지 반영한 A/B 여행 코스를 만들어 드려요.
+            날짜·시간·교통수단만 입력하면{'\n'}
+            혼잡도와 교통까지 반영한 여행 코스를 만들어 드려요.
           </Text>
           
           {/* CTA 버튼 */}
@@ -169,70 +241,376 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* 예시 카드 */}
-        <View style={styles.exampleCard}>
-          <View style={styles.exampleHeader}>
-            <Text style={styles.exampleHeaderText}>오늘 같이 갈까?</Text>
+        {/* 플랜 카드 - 실제 데이터 / 생성 중 / 예시 */}
+        <Pressable
+          style={[
+            styles.exampleCard,
+            isCourseGenerating && styles.exampleCardGenerating,
+          ]}
+          onPress={
+            (isCourseGenerating || hasDisplayData)
+              ? () => router.push('/(tabs)/results')
+              : undefined
+          }
+          disabled={!isCourseGenerating && !hasDisplayData}
+        >
+          {/* 헤더 */}
+          <View style={[
+            styles.exampleHeader,
+            isCourseGenerating && styles.exampleHeaderGenerating,
+          ]}>
+            <Text style={styles.exampleHeaderText}>
+              {isCourseGenerating
+                ? '실시간 코스 생성 중'
+                : generatedPlan
+                  ? `${generatedPlan.summary.region} 여행`
+                  : recentPlan
+                    ? (recentPlan.title || `${recentPlan.region} 여행`)
+                    : (user ? '첫 여행을 시작해보세요!' : '오늘 같이 갈까?')
+              }
+            </Text>
             <View style={styles.pulse}>
-              <View style={styles.pulseDot} />
-              <Text style={styles.exampleHeaderSubtext}>실시간 플랜 생성 중</Text>
+              <Animated.View
+                style={[
+                  styles.pulseDot,
+                  {
+                    transform: [{ scale: pulseAnim }],
+                    backgroundColor: isCourseGenerating ? '#34d399' : (hasDisplayData ? '#34d399' : '#94a3b8')
+                  }
+                ]}
+              />
+              <Text style={styles.exampleHeaderSubtext}>
+                {isCourseGenerating
+                  ? '생성 중...'
+                  : generatedPlan
+                    ? '최근 생성'
+                    : recentPlan
+                      ? '저장된 플랜'
+                      : '플랜 생성 대기'
+                }
+              </Text>
             </View>
           </View>
 
-          <View style={styles.exampleContent}>
-            <View style={styles.exampleLeft}>
-              <View style={styles.exampleImageContainer}>
-                <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.exampleImage}>
-                  <Text style={styles.exampleImageText}>홍대 카페</Text>
-                </LinearGradient>
-                <View style={styles.exampleBadge}>
-                  <Text style={styles.exampleBadgeText}>사진 기반 스팟 인식 완료 · 홍대입구 인근</Text>
+          {/* 코스 생성 중 상태 */}
+          {isCourseGenerating ? (
+            <View style={styles.generatingCardContent}>
+              <View style={styles.generatingProgressArea}>
+                <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                  <View style={styles.generatingIconCircle}>
+                    <Text style={styles.generatingIconText}>~</Text>
+                  </View>
+                </Animated.View>
+                <Text style={styles.generatingMainText}>코스를 만들고 있어요</Text>
+                <Text style={styles.generatingSubText}>
+                  혼잡도와 교통 정보를 분석하여{'\n'}최적의 동선을 설계하고 있어요
+                </Text>
+              </View>
+
+              <View style={styles.generatingSteps}>
+                <View style={styles.generatingStepRow}>
+                  <View style={[styles.generatingStepDot, styles.generatingStepDotDone]} />
+                  <Text style={styles.generatingStepLabel}>장소 선정 및 필터링</Text>
+                </View>
+                <View style={styles.generatingStepRow}>
+                  <View style={[styles.generatingStepDot, styles.generatingStepDotActive]} />
+                  <Text style={[styles.generatingStepLabel, styles.generatingStepLabelActive]}>동선 최적화 · 혼잡도 반영</Text>
+                </View>
+                <View style={styles.generatingStepRow}>
+                  <View style={styles.generatingStepDot} />
+                  <Text style={[styles.generatingStepLabel, styles.generatingStepLabelPending]}>타임라인 생성</Text>
                 </View>
               </View>
 
-              <View style={styles.exampleInfoCard}>
-                <View style={styles.exampleInfoHeader}>
-                  <Text style={styles.exampleInfoTitle}>오늘 3시간 · 대중교통</Text>
-                  <View style={styles.exampleInfoBadge}>
-                    <Text style={styles.exampleInfoBadgeText}>혼잡도 반영</Text>
+              <Pressable
+                style={styles.generatingCta}
+                onPress={() => router.push('/(tabs)/results')}
+              >
+                <Text style={styles.generatingCtaText}>결과 페이지에서 확인하기</Text>
+                <Text style={styles.generatingCtaArrow}>→</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <View style={styles.exampleContent}>
+                {/* 왼쪽: 일정 요약 카드 */}
+                <View style={styles.exampleLeft}>
+                  <View style={styles.exampleInfoCard}>
+                    <Text style={styles.exampleInfoTitle}>
+                      {generatedPlan
+                        ? `${generatedPlan.summary.start_date} ~ ${generatedPlan.summary.end_date}`
+                        : recentPlan
+                          ? recentPlan.date
+                          : '오늘'}
+                    </Text>
+
+                    {displayCourse ? (
+                      (() => {
+                        const dayVariants = Object.entries(displayCourse.variants).filter(
+                          (entry): entry is [string, typeof entry[1] & { route: unknown[]; timelines?: any }] =>
+                            Array.isArray(entry[1]?.route)
+                        );
+
+                        // 코스 개수는 결과 탭과 동일하게
+                        // - 우선 timeline.fastest_version 길이
+                        // - 없으면 route 길이
+                        const totalCourses = dayVariants.reduce((sum, [, day]) => {
+                          const timelines =
+                            (day.timelines?.fastest_version?.length
+                              ? day.timelines.fastest_version
+                              : day.timelines?.min_transfer_version) || [];
+                          if (timelines.length > 0) {
+                            return sum + timelines.length;
+                          }
+                          const routeLen = Array.isArray(day.route) ? day.route.length : 0;
+                          return sum + routeLen;
+                        }, 0);
+
+                        const activeDay = selectedDay || (dayVariants.length > 0 ? dayVariants[0][0] : null);
+
+                        return (
+                          <View style={styles.courseSummary}>
+                            <View style={styles.courseSummaryHeader}>
+                              <View style={styles.courseSummaryTag}>
+                                <Text style={styles.courseSummaryTagText}>
+                                  {dayVariants.length}일 여행
+                                </Text>
+                              </View>
+                              <View style={styles.courseSummaryTag}>
+                                <Text style={styles.courseSummaryTagText}>
+                                  {totalCourses}개 코스
+                                </Text>
+                              </View>
+                              <View style={styles.courseSummaryTag}>
+                                <Text style={styles.courseSummaryTagText}>
+                                  {displayCourse.summary?.transport === 'car' ? '차량' : '대중교통'}
+                                </Text>
+                              </View>
+                              <View style={[styles.courseSummaryTag, styles.courseSummaryTagHighlight]}>
+                                <Text style={styles.courseSummaryTagHighlightText}>혼잡도 반영</Text>
+                              </View>
+                            </View>
+
+                            <View style={styles.daySelectorSection}>
+                              <Text style={styles.courseSummaryLabel}>일자 선택</Text>
+                              {dayVariants.map(([day, dayPlan]) => {
+                                const isSelected = day === activeDay;
+
+                                const timelines =
+                                  (dayPlan.timelines?.fastest_version?.length
+                                    ? dayPlan.timelines.fastest_version
+                                    : dayPlan.timelines?.min_transfer_version) || [];
+
+                                // 결과 탭과 동일하게: 타임라인이 있으면 타임라인 순서 기준,
+                                // 없으면 route 기준으로 장소 이름 나열
+                                const sourcePlaces: { name: string }[] =
+                                  timelines.length > 0
+                                    ? timelines
+                                    : Array.isArray(dayPlan.route)
+                                      ? dayPlan.route
+                                      : [];
+
+                                const placeNames = sourcePlaces.map((p) => p.name);
+
+                                return (
+                                  <Pressable
+                                    key={day}
+                                    onPress={() => setSelectedDay(day)}
+                                    style={[
+                                      styles.courseDayRow,
+                                      isSelected && styles.courseDayRowSelected
+                                    ]}
+                                  >
+                                    <View
+                                      style={[
+                                        styles.courseDayBadge,
+                                        isSelected && styles.courseDayBadgeSelected
+                                      ]}
+                                    >
+                                      <Text style={styles.courseDayBadgeText}>
+                                        {day.replace('day', 'D')}
+                                      </Text>
+                                    </View>
+                                    <Text style={styles.courseDayText} numberOfLines={1}>
+                                      {placeNames.length > 0 ? placeNames.join(' → ') : '장소 정보 없음'}
+                                    </Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </View>
+                          </View>
+                        );
+                      })()
+                    ) : (
+                      <Text style={styles.exampleInfoDesc}>
+                        코스 자동 구성 완료
+                      </Text>
+                    )}
                   </View>
                 </View>
-                <Text style={styles.exampleInfoDesc}>카페 → 전시 → 야경 루트 자동 구성 완료</Text>
-              </View>
-            </View>
 
-            <View style={styles.exampleRight}>
-              <View style={styles.statRow}>
-                <Text style={styles.statLabel}>예상 소요시간</Text>
-                <Text style={styles.statValue}>3시간 10분</Text>
-              </View>
-              <View style={styles.statRow}>
-                <Text style={styles.statLabel}>이동 시간</Text>
-                <Text style={styles.statValue}>42분</Text>
-              </View>
-              <View style={styles.statRow}>
-                <Text style={styles.statLabel}>혼잡 구간 경고</Text>
-                <View style={styles.warningBadge}>
-                  <View style={styles.warningDot} />
-                  <Text style={styles.warningText}>1곳</Text>
+                {/* 오른쪽: 시간 정보 + 혼잡 구간 경고 */}
+                <View style={styles.exampleRight}>
+                  {displayCourse ? (
+                    (() => {
+                      const dayVariants = Object.entries(displayCourse.variants).filter(
+                        (entry): entry is [string, typeof entry[1] & { route: unknown[] }] =>
+                          Array.isArray(entry[1]?.route)
+                      );
+
+                      const calculateDayCongestion = (dayPlan: typeof dayVariants[0][1]) => {
+                        let congestionCount = 0;
+                        const timelines = dayPlan.timelines?.fastest_version || dayPlan.timelines?.min_transfer_version || [];
+                        timelines.forEach((item: any) => {
+                          if (
+                            (item.traffic_level && typeof item.traffic_level === 'string' && item.traffic_level.includes('🔴정체')) ||
+                            (item.population_level && typeof item.population_level === 'string' && item.population_level.includes('🔴혼잡'))
+                          ) {
+                            congestionCount++;
+                          }
+                        });
+                        return congestionCount;
+                      };
+
+                      const formatTime = (minutes: number) => {
+                        const hours = Math.floor(minutes / 60);
+                        const mins = minutes % 60;
+                        if (hours > 0) {
+                          return `${hours}시간 ${mins > 0 ? `${mins}분` : ''}`;
+                        }
+                        return `${mins}분`;
+                      };
+
+                      const calculateDayTimes = (dayPlan: typeof dayVariants[0][1]) => {
+                        let stayMinutes = 0;
+                        let transitMinutes = 0;
+                        let hasTimelineData = false;
+                        const timelines = dayPlan.timelines?.fastest_version || dayPlan.timelines?.min_transfer_version || [];
+                        if (timelines.length > 0) {
+                          hasTimelineData = true;
+                          timelines.forEach((item: { time?: string; transit_to_here?: string[] }) => {
+                            if (item.time) {
+                              const timeMatch = item.time.match(/(\d{2}):(\d{2})\s*-\s*(\d{2}):(\d{2})/);
+                              if (timeMatch) {
+                                stayMinutes += (parseInt(timeMatch[3]) * 60 + parseInt(timeMatch[4])) - (parseInt(timeMatch[1]) * 60 + parseInt(timeMatch[2]));
+                              }
+                            }
+                            if (item.transit_to_here && Array.isArray(item.transit_to_here)) {
+                              item.transit_to_here.forEach((transit: string) => {
+                                const transitMatch = transit.match(/(\d+)\s*분/);
+                                if (transitMatch) transitMinutes += parseInt(transitMatch[1]);
+                              });
+                            }
+                          });
+                        } else {
+                          const routeCount = dayPlan.route?.length || 0;
+                          if (routeCount > 0) {
+                            stayMinutes = routeCount * 60;
+                            transitMinutes = Math.max(0, (routeCount - 1) * 15);
+                          }
+                        }
+                        return { stayMinutes, transitMinutes, hasTimelineData };
+                      };
+
+                      const dayInfoMap = new Map<string, { stayMinutes: number; transitMinutes: number; congestionCount: number; hasTimelineData: boolean }>();
+                      dayVariants.forEach(([day, dayPlan]) => {
+                        const { stayMinutes, transitMinutes, hasTimelineData } = calculateDayTimes(dayPlan);
+                        dayInfoMap.set(day, { stayMinutes, transitMinutes, congestionCount: calculateDayCongestion(dayPlan), hasTimelineData });
+                      });
+
+                      const activeDay = selectedDay || (dayVariants.length > 0 ? dayVariants[0][0] : null);
+                      const activeDayInfo = activeDay ? dayInfoMap.get(activeDay) : null;
+                      const { stayMinutes = 0, transitMinutes = 0, congestionCount: activeDayCongestion = 0, hasTimelineData = false } = activeDayInfo || {};
+
+                      return (
+                        <>
+                          {activeDay && (
+                            <View style={styles.timeInfoSection}>
+                              <Text style={styles.selectedDayLabel}>
+                                {activeDay.replace('day', 'D')} 일정
+                              </Text>
+                              <View style={styles.statRow}>
+                                <Text style={styles.statLabel}>예상 소요시간</Text>
+                                {stayMinutes > 0 ? (
+                                  <Text style={styles.statValue}>
+                                    {formatTime(stayMinutes)}
+                                    {!hasTimelineData && <Text style={styles.estimatedText}> (추정)</Text>}
+                                  </Text>
+                                ) : (
+                                  <Text style={styles.statValue}>정보 없음</Text>
+                                )}
+                              </View>
+                              <View style={styles.statRow}>
+                                <Text style={styles.statLabel}>이동 시간</Text>
+                                {transitMinutes > 0 ? (
+                                  <Text style={styles.statValue}>
+                                    {formatTime(transitMinutes)}
+                                    {!hasTimelineData && <Text style={styles.estimatedText}> (추정)</Text>}
+                                  </Text>
+                                ) : (
+                                  <Text style={styles.statValue}>정보 없음</Text>
+                                )}
+                              </View>
+                            </View>
+                          )}
+                          {activeDay && (
+                            <View style={[
+                              styles.congestionRowSimple,
+                              activeDayCongestion > 0 && styles.congestionRowHighlighted
+                            ]}>
+                              <Text style={styles.statLabel}>혼잡 구간 경고</Text>
+                              {activeDayCongestion > 0 ? (
+                                <View style={styles.warningBadge}>
+                                  <View style={styles.warningDot} />
+                                  <Text style={styles.warningText}>{activeDayCongestion}곳</Text>
+                                </View>
+                              ) : (
+                                <Text style={styles.noCongestionText}>없음</Text>
+                              )}
+                            </View>
+                          )}
+                        </>
+                      );
+                    })()
+                  ) : (
+                    <View style={styles.statRow}>
+                      <Text style={styles.statLabel}>혼잡 구간 경고</Text>
+                      <View style={styles.warningBadge}>
+                        <View style={styles.warningDot} />
+                        <Text style={styles.warningText}>1곳</Text>
+                      </View>
+                    </View>
+                  )}
                 </View>
               </View>
 
-              <View style={styles.courseComparison}>
-                <View style={styles.courseARow}>
-                  <Text style={styles.courseAText}>코스 A · 감성 카페 위주</Text>
-                  <Text style={styles.recommendBadge}>추천</Text>
+              {/* 하단 CTA */}
+              {hasDisplayData ? (
+                <View style={styles.planCardCta}>
+                  <Text style={styles.planCardCtaText}>상세 일정 보기</Text>
                 </View>
-                <View style={styles.courseBRow}>
-                  <Text style={styles.courseBText}>코스 B · 야경/전망 위주</Text>
-                  <Pressable onPress={() => router.push('/(tabs)/results')}>
-                    <Text style={styles.compareLink}>A/B 코스 비교 보기</Text>
-                  </Pressable>
-                </View>
-              </View>
-            </View>
-          </View>
-        </View>
+              ) : (
+                <Pressable
+                  style={styles.exampleCta}
+                  onPress={() => {
+                    clearPlaces();
+                    router.push('/course');
+                  }}
+                >
+                  <LinearGradient
+                    colors={['rgba(99, 102, 241, 0.1)', 'rgba(139, 92, 246, 0.1)']}
+                    style={styles.exampleCtaGradient}
+                  >
+                    <Text style={styles.exampleCtaText}>
+                      {user ? '나만의 플랜 만들기' : '로그인하고 플랜 만들기'}
+                    </Text>
+                    <Text style={styles.exampleCtaArrow}>→</Text>
+                  </LinearGradient>
+                </Pressable>
+              )}
+            </>
+          )}
+        </Pressable>
       </View>
 
       {/* 진입 방식 선택 */}
@@ -312,7 +690,6 @@ export default function HomeScreen() {
             <Text style={styles.infoItem}>· 지역 / 목적 (데이트, 혼자, 가족 등)</Text>
             <Text style={styles.infoItem}>· 날짜 / 시작 시간</Text>
             <Text style={styles.infoItem}>· 교통수단 (도보 / 대중교통 / 차량)</Text>
-            <Text style={styles.infoItem}>· 예산 대략 범위</Text>
           </View>
 
           <View style={styles.infoColumn}>
@@ -322,7 +699,6 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.infoTitle}>코스 조건</Text>
             </View>
-            <Text style={styles.infoItem}>· 소요 시간 (3시간 / 반나절 / 1일)</Text>
             <Text style={styles.infoItem}>· 카테고리 (카페, 전시, 자연 등)</Text>
             <Text style={styles.infoItem}>· 이동 속도 / 휴식 선호</Text>
           </View>
@@ -334,7 +710,6 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.infoTitle}>결과 확인 & 공유</Text>
             </View>
-            <Text style={styles.infoItem}>· A안 / B안 동선 비교</Text>
             <Text style={styles.infoItem}>· 혼잡·교통 경고 확인</Text>
             <Text style={styles.infoItem}>· 플랜 저장 & URL 공유</Text>
           </View>
@@ -355,9 +730,9 @@ export default function HomeScreen() {
       />
       
       {/* 전체 화면 로딩 - 데이터를 불러올 때 표시됩니다 */}
-      <FullScreenLoader 
-        visible={isLoadingData} 
-        message="데이터를 불러오는 중..." 
+      <FullScreenLoader
+        visible={isLoadingData && !isCourseGenerating && !generatedPlan}
+        message="데이터를 불러오는 중..."
       />
     </SafeAreaView>
   );
@@ -410,25 +785,115 @@ const styles = StyleSheet.create({
     color: '#1e293b',
     flexShrink: 1,
   },
-  generatingBanner: {
-    backgroundColor: '#e0e7ff',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    marginHorizontal: 20,
-    marginTop: 12,
-    borderRadius: 12,
-    borderWidth: 1,
+  exampleCardGenerating: {
+    borderColor: '#c7d2fe',
+    boxShadow: '0 8px 24px rgba(99, 102, 241, 0.18)',
+  },
+  exampleHeaderGenerating: {
+    backgroundColor: '#312e81',
+  },
+  generatingCardContent: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  generatingProgressArea: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  generatingIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    borderWidth: 2,
     borderColor: '#c7d2fe',
   },
-  generatingBannerText: {
-    fontSize: 15,
+  generatingIconText: {
+    fontSize: 22,
+    color: '#6366f1',
+    fontWeight: '700',
+  },
+  generatingMainText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1e1b4b',
+    marginBottom: 6,
+    letterSpacing: -0.3,
+  },
+  generatingSubText: {
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 19,
+  },
+  generatingSteps: {
+    width: '100%',
+    gap: 10,
+    marginBottom: 18,
+    paddingHorizontal: 4,
+  },
+  generatingStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+  },
+  generatingStepDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#cbd5e1',
+    borderWidth: 2,
+    borderColor: '#e2e8f0',
+  },
+  generatingStepDotDone: {
+    backgroundColor: '#34d399',
+    borderColor: '#a7f3d0',
+  },
+  generatingStepDotActive: {
+    backgroundColor: '#6366f1',
+    borderColor: '#c7d2fe',
+  },
+  generatingStepLabel: {
+    fontSize: 13,
     fontWeight: '600',
+    color: '#334155',
+  },
+  generatingStepLabelActive: {
+    color: '#4338ca',
+    fontWeight: '700',
+  },
+  generatingStepLabelPending: {
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+  generatingCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingVertical: 14,
+    borderRadius: 14,
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    gap: 8,
+  },
+  generatingCtaText: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#4338ca',
   },
-  generatingBannerSubtext: {
-    fontSize: 13,
+  generatingCtaArrow: {
+    fontSize: 16,
     color: '#6366f1',
-    marginTop: 2,
+    fontWeight: '600',
   },
   headerLink: {
     fontSize: 14,
@@ -540,49 +1005,49 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
+    borderColor: '#e8ecf4',
     padding: 18,
-    boxShadow: '0 4px 8px rgba(0, 0, 0, 0.08)',
-    elevation: 4,
+    boxShadow: '0 8px 24px rgba(99, 102, 241, 0.1)',
+    elevation: 6,
   },
   exampleHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#0f172a',
+    backgroundColor: '#1e1b4b',
     borderRadius: 14,
-    padding: 14,
-    marginBottom: 14,
+    padding: 16,
+    marginBottom: 16,
   },
   exampleHeaderText: {
     color: '#ffffff',
-    fontSize: 13,
-    opacity: 0.9,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
   },
   pulse: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
   },
   pulseDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: '#34d399',
     marginRight: 6,
   },
   exampleHeaderSubtext: {
-    color: '#ffffff',
-    fontSize: 13,
-    opacity: 0.9,
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 12,
     fontWeight: '500',
   },
   exampleContent: {
     flexDirection: width < 400 ? 'column' : 'row',
-    gap: 12,
+    gap: 14,
   },
   exampleLeft: {
-    flex: 1,
+    flex: 1.2,
     minWidth: width < 400 ? '100%' : undefined,
   },
   exampleImageContainer: {
@@ -597,6 +1062,61 @@ const styles = StyleSheet.create({
   exampleImageText: {
     fontSize: 15,
     fontWeight: '600',
+    color: '#ffffff',
+    marginTop: 8,
+  },
+  // 지도 경로 시각화 스타일
+  mapRouteContainer: {
+    position: 'relative',
+    width: '80%',
+    height: 60,
+    marginBottom: 8,
+  },
+  routeLine: {
+    position: 'absolute',
+    top: '50%',
+    left: 10,
+    right: 10,
+    height: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.4)',
+    borderRadius: 2,
+  },
+  routePoint: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  routePointStart: {
+    left: 0,
+    top: '50%',
+    marginTop: -12,
+    backgroundColor: '#34d399',
+  },
+  routePointMid: {
+    left: '50%',
+    marginLeft: -12,
+    top: '50%',
+    marginTop: -12,
+    backgroundColor: '#fbbf24',
+  },
+  routePointEnd: {
+    right: 0,
+    top: '50%',
+    marginTop: -12,
+    backgroundColor: '#f87171',
+  },
+  routePointText: {
+    fontSize: 11,
+    fontWeight: 'bold',
     color: '#ffffff',
   },
   exampleBadge: {
@@ -614,71 +1134,235 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   exampleInfoCard: {
-    backgroundColor: '#eef2ff',
+    backgroundColor: '#f8f9ff',
     borderWidth: 1,
-    borderColor: '#c7d2fe',
-    borderRadius: 14,
-    padding: 14,
+    borderColor: '#e0e7ff',
+    borderRadius: 16,
+    padding: 16,
   },
   exampleInfoHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 10,
   },
   exampleInfoTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#312e81',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1e1b4b',
+    letterSpacing: -0.3,
+    marginBottom: 10,
   },
   exampleInfoBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    backgroundColor: '#e0e7ff',
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12,
+    borderRadius: 20,
   },
   exampleInfoBadgeText: {
     fontSize: 10,
-    color: '#312e81',
-    fontWeight: '500',
+    color: '#4338ca',
+    fontWeight: '600',
   },
   exampleInfoDesc: {
     fontSize: 12,
-    color: '#312e81',
+    color: '#6366f1',
+    fontWeight: '500',
+  },
+  courseSummary: {
+    gap: 10,
+    marginTop: 6,
+  },
+  daySelectorSection: {
+    gap: 6,
+    marginTop: 10,
+  },
+  timeInfoSection: {
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef2ff',
+  },
+  congestionSection: {
+    gap: 10,
+  },
+  congestionDayRow: {
+    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  congestionRowSimple: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginTop: 10,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  congestionRowHighlighted: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
+  },
+  congestionDayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  courseSummaryHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 4,
+  },
+  courseSummaryTag: {
+    backgroundColor: '#ede9fe',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  courseSummaryTagText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#5b21b6',
+  },
+  courseSummaryTagHighlight: {
+    backgroundColor: '#dbeafe',
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+  },
+  courseSummaryTagHighlightText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  courseSummaryLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6366f1',
+    letterSpacing: 0.2,
+  },
+  courseDayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  courseDayRowSelected: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#818cf8',
+  },
+  courseDayBadge: {
+    backgroundColor: '#334155',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    minWidth: 36,
+    alignItems: 'center',
+  },
+  courseDayBadgeSelected: {
+    backgroundColor: '#6366f1',
+  },
+  courseDayBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  courseDayText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#334155',
+    fontWeight: '500',
+  },
+  courseSummaryRight: {
+    gap: 8,
+    marginBottom: 12,
   },
   exampleRight: {
     flex: 1,
     minWidth: width < 400 ? '100%' : undefined,
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  statsSection: {
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  selectedDayLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#4338ca',
+    marginBottom: 10,
+    letterSpacing: -0.2,
   },
   statRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  congestionRow: {
+    backgroundColor: '#fef2f2',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginTop: 4,
+    marginBottom: 0,
   },
   statLabel: {
     fontSize: 12,
     color: '#64748b',
+    fontWeight: '500',
   },
   statValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  noCongestionText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#0f172a',
+    color: '#15803d',
+    fontWeight: '700',
+  },
+  estimatedText: {
+    fontSize: 10,
+    color: '#94a3b8',
+    fontWeight: '400',
   },
   warningBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
   warningDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 4,
     backgroundColor: '#f59e0b',
     marginRight: 5,
   },
   warningText: {
     fontSize: 12,
-    color: '#f59e0b',
-    fontWeight: '500',
+    color: '#b45309',
+    fontWeight: '700',
   },
   courseComparison: {
     borderTopWidth: 1,
@@ -716,6 +1400,207 @@ const styles = StyleSheet.create({
     color: '#6366f1',
     textDecorationLine: 'underline',
     fontWeight: '500',
+  },
+  compareHint: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: '500',
+  },
+  // 실제 플랜 카드 스타일
+  planCard: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  planCardGradient: {
+    padding: 20,
+    borderRadius: 20,
+  },
+  planCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  planCardHeaderLeft: {
+    flex: 1,
+  },
+  planCardLabel: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  planCardTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    letterSpacing: -0.5,
+  },
+  planCardBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  planCardBadgeText: {
+    fontSize: 12,
+    color: '#ffffff',
+    fontWeight: '600',
+  },
+  planCardBody: {
+    marginBottom: 16,
+  },
+  planCardInfo: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 12,
+  },
+  planInfoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  planInfoIcon: {
+    fontSize: 14,
+  },
+  planInfoText: {
+    fontSize: 14,
+    color: '#ffffff',
+    fontWeight: '500',
+  },
+  planVariants: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    borderRadius: 12,
+    padding: 12,
+    gap: 8,
+  },
+  planVariantItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  planVariantDay: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: 'rgba(255, 255, 255, 0.7)',
+    width: 40,
+  },
+  planVariantText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#ffffff',
+  },
+  planCardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  planCardFooterText: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '500',
+  },
+  planCardArrow: {
+    fontSize: 18,
+    color: '#ffffff',
+    fontWeight: '300',
+  },
+  morePlansHint: {
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    marginTop: -4,
+  },
+  morePlansText: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  // 예시 카드 개선 스타일
+  exampleImageContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exampleEmoji: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  exampleImageSubtext: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginTop: 4,
+  },
+  exampleCta: {
+    marginTop: 14,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  exampleCtaGradient: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.25)',
+  },
+  exampleCtaText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#4338ca',
+  },
+  exampleCtaArrow: {
+    fontSize: 16,
+    color: '#6366f1',
+    fontWeight: '600',
+  },
+  // 실제 플랜 카드 하단 CTA
+  planCardCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eef2ff',
+    marginTop: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    gap: 8,
+  },
+  planCardCtaText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#4338ca',
+  },
+  planCardCtaArrow: {
+    fontSize: 16,
+    color: '#6366f1',
+    fontWeight: '600',
+  },
+  morePlansBadge: {
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginLeft: 4,
+  },
+  morePlansBadgeText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#ffffff',
   },
   section: {
     padding: 20,
