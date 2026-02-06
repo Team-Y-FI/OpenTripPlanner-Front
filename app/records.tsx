@@ -1,17 +1,44 @@
-import { useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions } from 'react-native';
+import { useState, useCallback } from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Image, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Toast from 'react-native-toast-message';
 import { usePlaces } from '@/contexts/PlacesContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { API_URL, recordService, type SpotListItem } from '@/services';
 
 const { width } = Dimensions.get('window');
+const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
+
+const resolveStorageUrl = (url?: string | null) => {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith('/')) return `${STORAGE_BASE}${url}`;
+  return `${STORAGE_BASE}/${url}`;
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return '날짜 없음';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return value;
+  }
+};
 
 export default function RecordsScreen() {
   const router = useRouter();
-  const { clearPlaces } = usePlaces();
+  const { user } = useAuth();
+  const { setSelectedPlaces } = usePlaces();
   const [activeTab, setActiveTab] = useState('spots');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [spots, setSpots] = useState<SpotListItem[]>([]);
+  const [selectedSpotIds, setSelectedSpotIds] = useState<Set<string>>(new Set());
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -21,14 +48,110 @@ export default function RecordsScreen() {
     }
   };
 
-  const spots = [
-    { id: '1', name: '마들렌 카페 홍대점', address: '서울 마포구 양화로 00길 12', date: '2024-05-03', tags: ['데이트', '브런치'] },
-    { id: '2', name: '성수동 카페 거리', address: '서울 성동구 성수이로 123', date: '2024-04-20', tags: ['혼자', '감성'] },
-  ];
+  const loadSpots = useCallback(async () => {
+    if (!user) {
+      setSpots([]);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const response = await recordService.listSpots({ limit: 50 });
+      setSpots(response.items || []);
+    } catch (error) {
+      console.error('기록 로딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '불러오기 실패',
+        text2: '기록을 불러오는 중 오류가 발생했습니다.',
+      });
+      setSpots([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user]);
 
-  const plans = [
-    { id: '1', location: '홍대입구역', duration: '3시간', moveMode: '대중교통', purposes: ['데이트'], categories: ['카페', '전시'], savedAt: '2024-05-03' },
-  ];
+  useFocusEffect(
+    useCallback(() => {
+      void loadSpots();
+    }, [loadSpots])
+  );
+
+  const toggleSelect = (spotId: string) => {
+    setSelectedSpotIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(spotId)) next.delete(spotId);
+      else next.add(spotId);
+      return next;
+    });
+  };
+
+  const handleCreateCourse = () => {
+    const selected = spots.filter((s) => selectedSpotIds.has(s.spot_id));
+    if (selected.length === 0) {
+      Toast.show({
+        type: 'info',
+        text1: '선택된 장소 없음',
+        text2: '코스 생성을 위해 장소를 선택해주세요.',
+      });
+      return;
+    }
+
+    const mapped = selected.map((s) => ({
+      id: s.spot_id,
+      filename: '',
+      placeName: s.place.name,
+      placeAddress: s.place.address || '',
+      category: s.place.category || '기타',
+      timestamp: s.visited_at || '',
+      lat: s.place.lat,
+      lng: s.place.lng,
+    }));
+
+    setSelectedPlaces(mapped);
+    router.push('/course');
+  };
+
+  const handleDeleteSelected = () => {
+    const ids = Array.from(selectedSpotIds);
+    if (ids.length === 0) {
+      Toast.show({
+        type: 'info',
+        text1: '선택된 장소 없음',
+        text2: '삭제할 장소를 선택해주세요.',
+      });
+      return;
+    }
+
+    Alert.alert('선택 삭제', `${ids.length}개 스팟을 삭제할까요?`, [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '삭제',
+        style: 'destructive',
+        onPress: async () => {
+          setIsDeleting(true);
+          try {
+            await Promise.all(ids.map((id) => recordService.deleteSpot(id)));
+            setSelectedSpotIds(new Set());
+            await loadSpots();
+            Toast.show({
+              type: 'success',
+              text1: '삭제 완료',
+              text2: `${ids.length}개 스팟을 삭제했습니다.`,
+            });
+          } catch (error) {
+            console.error('삭제 실패:', error);
+            Toast.show({
+              type: 'error',
+              text1: '삭제 실패',
+              text2: '스팟 삭제 중 오류가 발생했습니다.',
+            });
+          } finally {
+            setIsDeleting(false);
+          }
+        },
+      },
+    ]);
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -52,12 +175,9 @@ export default function RecordsScreen() {
             <Ionicons name="image" size={18} color="#64748b" style={{ marginRight: 6 }} />
             <Text style={styles.headerButtonText}>사진 기록</Text>
           </Pressable>
-          <Pressable style={styles.headerButtonPrimary} onPress={() => {
-            clearPlaces();
-            router.push('/course');
-          }}>
+          <Pressable style={styles.headerButtonPrimary} onPress={handleCreateCourse}>
             <Ionicons name="add-circle" size={18} color="#ffffff" style={{ marginRight: 6 }} />
-            <Text style={styles.headerButtonPrimaryText}>새 플랜</Text>
+            <Text style={styles.headerButtonPrimaryText}>코스 생성</Text>
           </Pressable>
         </View>
       </View>
@@ -81,27 +201,72 @@ export default function RecordsScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>개인 기록 스팟</Text>
-              <Text style={styles.sectionCount}>총 {spots.length}개</Text>
+              <View style={styles.sectionHeaderActions}>
+                <Text style={styles.sectionCount}>총 {spots.length}개</Text>
+                <Pressable
+                  style={[
+                    styles.deleteButton,
+                    (selectedSpotIds.size === 0 || isDeleting) && styles.deleteButtonDisabled,
+                  ]}
+                  onPress={handleDeleteSelected}
+                  disabled={selectedSpotIds.size === 0 || isDeleting}>
+                  <Ionicons name="trash-outline" size={14} color="#dc2626" style={{ marginRight: 4 }} />
+                  <Text style={styles.deleteButtonText}>선택 삭제</Text>
+                </Pressable>
+              </View>
             </View>
-            {spots.map(spot => (
-              <Pressable
-                key={spot.id}
-                style={styles.card}
-                onPress={() => router.push('/record')}>
-                <View style={styles.cardContent}>
-                  <Text style={styles.cardTitle}>{spot.name}</Text>
-                  <Text style={styles.cardSubtitle}>{spot.address}</Text>
-                  <Text style={styles.cardDate}>{spot.date}</Text>
-                </View>
-                <View style={styles.cardTags}>
-                  {spot.tags.map((tag, idx) => (
-                    <View key={idx} style={styles.cardTag}>
-                      <Text style={styles.cardTagText}>{tag}</Text>
+
+            {isLoading ? (
+              <View style={styles.loadingState}>
+                <ActivityIndicator size="small" color="#6366f1" />
+                <Text style={styles.loadingText}>기록을 불러오는 중...</Text>
+              </View>
+            ) : spots.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>등록된 장소가 없습니다</Text>
+                <Text style={styles.emptyStateSubtext}>사진 업로드 후 장소 등록을 완료해주세요.</Text>
+              </View>
+            ) : (
+              spots.map((spot) => {
+                const selected = selectedSpotIds.has(spot.spot_id);
+                const thumbnailUrl = resolveStorageUrl(spot.thumbnail_url);
+                return (
+                  <View key={spot.spot_id} style={[styles.card, selected && styles.cardSelected]}>
+                    <View style={styles.cardRow}>
+                      <View style={styles.cardThumbnail}>
+                        {thumbnailUrl ? (
+                          <Image source={{ uri: thumbnailUrl }} style={styles.cardThumbnailImage} />
+                        ) : (
+                          <LinearGradient colors={['#cbd5e1', '#94a3b8']} style={styles.cardThumbnailPlaceholder}>
+                            <Text style={styles.cardThumbnailText}>사진</Text>
+                          </LinearGradient>
+                        )}
+                      </View>
+                      <View style={styles.cardContent}>
+                        <View style={styles.cardHeaderRow}>
+                          <Text style={styles.cardTitle} numberOfLines={1}>{spot.place.name}</Text>
+                          <Pressable onPress={() => toggleSelect(spot.spot_id)} style={styles.selectButton}>
+                            <Ionicons
+                              name={selected ? 'checkbox' : 'square-outline'}
+                              size={20}
+                              color={selected ? '#6366f1' : '#94a3b8'}
+                            />
+                          </Pressable>
+                        </View>
+                        <Text style={styles.cardSubtitle} numberOfLines={1}>{spot.place.address || '주소 없음'}</Text>
+                        <View style={styles.cardMetaRow}>
+                          <Text style={styles.cardDate}>{formatDate(spot.visited_at)}</Text>
+                          <Text style={styles.cardCategory}>{spot.place.category || '기타'}</Text>
+                        </View>
+                        <Pressable onPress={() => router.push(`/record?spot_id=${spot.spot_id}`)}>
+                          <Text style={styles.cardLink}>상세 보기</Text>
+                        </Pressable>
+                      </View>
                     </View>
-                  ))}
-                </View>
-              </Pressable>
-            ))}
+                  </View>
+                );
+              })
+            )}
           </View>
         )}
 
@@ -109,29 +274,12 @@ export default function RecordsScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>저장된 여행 플랜</Text>
-              <Text style={styles.sectionCount}>총 {plans.length}개</Text>
+              <Text style={styles.sectionCount}>총 0개</Text>
             </View>
-            {plans.map(plan => (
-              <View key={plan.id} style={styles.planCard}>
-                <View style={styles.planContent}>
-                  <Text style={styles.planTitle}>
-                    {plan.location} · {plan.duration} · {plan.moveMode}
-                  </Text>
-                  <Text style={styles.planSubtitle}>
-                    {plan.purposes.join(', ')} / {plan.categories.join(', ')}
-                  </Text>
-                  <Text style={styles.planDate}>저장일: {plan.savedAt}</Text>
-                </View>
-                <View style={styles.planActions}>
-                  <Pressable
-                    style={styles.planButton}
-                    onPress={() => router.push('/(tabs)/results')}>
-                    <Text style={styles.planButtonText}>플랜 열기</Text>
-                  </Pressable>
-                  <Text style={styles.planNote}>A/B 코스 포함</Text>
-                </View>
-              </View>
-            ))}
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>저장된 플랜이 없습니다</Text>
+              <Text style={styles.emptyStateSubtext}>추천 결과에서 플랜을 저장해보세요.</Text>
+            </View>
           </View>
         )}
       </ScrollView>
@@ -171,8 +319,7 @@ const styles = StyleSheet.create({
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
-    marginLeft: 8,
+    gap: 10,
   },
   logo: {
     width: 32,
@@ -180,9 +327,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
-    boxShadow: '0 2px 4px rgba(99, 102, 241, 0.3)',
-    elevation: 3,
   },
   logoText: {
     color: '#ffffff',
@@ -199,19 +343,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   headerButton: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 14,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
   headerButtonText: {
     fontSize: 13,
@@ -219,16 +358,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerButtonPrimary: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#0f172a',
+    backgroundColor: '#6366f1',
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 14,
-    boxShadow: '0 3px 6px rgba(15, 23, 42, 0.3)',
-    elevation: 4,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
   headerButtonPrimaryText: {
     fontSize: 13,
@@ -236,38 +371,27 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   tabBar: {
-    backgroundColor: '#ffffff',
     flexDirection: 'row',
-    padding: 16,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    elevation: 1,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
   },
   tab: {
-    paddingHorizontal: 20,
+    flex: 1,
+    alignItems: 'center',
     paddingVertical: 12,
-    borderRadius: 16,
-    backgroundColor: '#f8fafc',
   },
   tabActive: {
-    backgroundColor: '#0f172a',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
+    borderBottomWidth: 2,
+    borderBottomColor: '#6366f1',
   },
   tabText: {
     fontSize: 14,
-    color: '#475569',
-    fontWeight: '500',
+    color: '#94a3b8',
+    fontWeight: '600',
   },
   tabTextActive: {
-    color: '#ffffff',
-    fontWeight: '600',
+    color: '#6366f1',
   },
   scrollView: {
     flex: 1,
@@ -279,6 +403,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 12,
+    alignItems: 'center',
+  },
+  sectionHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   sectionTitle: {
     fontSize: 15,
@@ -289,125 +419,125 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#64748b',
   },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fff1f2',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  deleteButtonDisabled: {
+    opacity: 0.5,
+  },
+  deleteButtonText: {
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '600',
+  },
+  loadingState: {
+    paddingVertical: 30,
+    alignItems: 'center',
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 13,
+    color: '#94a3b8',
+  },
+  emptyState: {
+    paddingVertical: 30,
+    alignItems: 'center',
+  },
+  emptyStateText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748b',
+    marginBottom: 6,
+  },
+  emptyStateSubtext: {
+    fontSize: 13,
+    color: '#94a3b8',
+  },
   card: {
     backgroundColor: '#ffffff',
+    padding: 16,
     borderRadius: 16,
-    padding: 18,
     marginBottom: 12,
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)',
+    elevation: 2,
+  },
+  cardSelected: {
+    borderWidth: 2,
+    borderColor: '#6366f1',
+  },
+  cardRow: {
     flexDirection: width < 400 ? 'column' : 'row',
-    justifyContent: 'space-between',
-    alignItems: width < 400 ? 'flex-start' : 'center',
-    gap: width < 400 ? 12 : 0,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-    borderLeftWidth: 4,
-    borderLeftColor: '#10b981',
+    gap: 14,
+  },
+  cardThumbnail: {
+    width: 80,
+    height: 80,
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  cardThumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+  cardThumbnailPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardThumbnailText: {
+    fontSize: 12,
+    color: '#ffffff',
+    fontWeight: '600',
   },
   cardContent: {
     flex: 1,
   },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 4,
+  },
   cardTitle: {
+    flex: 1,
     fontSize: 15,
     fontWeight: '600',
     color: '#0f172a',
-    marginBottom: 6,
-    flexWrap: 'wrap',
-    flexShrink: 1,
+  },
+  selectButton: {
+    padding: 4,
   },
   cardSubtitle: {
     fontSize: 13,
     color: '#64748b',
-    marginBottom: 6,
+    marginBottom: 8,
+  },
+  cardMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
   cardDate: {
     fontSize: 12,
     color: '#94a3b8',
   },
-  cardTags: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    alignItems: 'flex-start',
-    justifyContent: 'flex-end',
-  },
-  cardTag: {
-    backgroundColor: '#6366f1',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 14,
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  cardTagText: {
+  cardCategory: {
     fontSize: 12,
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  planCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 12,
-    flexDirection: width < 400 ? 'column' : 'row',
-    justifyContent: 'space-between',
-    alignItems: width < 400 ? 'flex-start' : 'center',
-    gap: width < 400 ? 12 : 0,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-    borderLeftWidth: 4,
-    borderLeftColor: '#38bdf8',
-  },
-  planContent: {
-    flex: 1,
-  },
-  planTitle: {
-    fontSize: 15,
+    color: '#6366f1',
     fontWeight: '600',
-    color: '#0f172a',
-    marginBottom: 6,
-    flexWrap: 'wrap',
-    flexShrink: 1,
   },
-  planSubtitle: {
+  cardLink: {
     fontSize: 13,
-    color: '#64748b',
-    marginBottom: 6,
-  },
-  planDate: {
-    fontSize: 12,
-    color: '#94a3b8',
-  },
-  planActions: {
-    alignItems: 'flex-end',
-  },
-  planButton: {
-    backgroundColor: '#0f172a',
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 16,
-    marginBottom: 6,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  planButtonText: {
-    fontSize: 14,
-    color: '#ffffff',
+    color: '#6366f1',
+    textDecorationLine: 'underline',
     fontWeight: '600',
-  },
-  planNote: {
-    fontSize: 12,
-    color: '#94a3b8',
   },
 });

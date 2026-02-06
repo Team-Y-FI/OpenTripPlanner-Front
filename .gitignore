@@ -43,6 +43,6 @@ app-example
 /android
 
 .vscode/
-package-lock.json
+.package-lock.json
 .gitignore
 .env
