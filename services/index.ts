@@ -6,6 +6,7 @@ export { authService } from "./authService";
 export { metaService } from "./metaService";
 export { utilsService } from "./utilsService";
 export { planService } from "./planService";
+export { recordService } from "./recordService";
 export type {
   User,
   LoginRequest,
@@ -29,3 +30,4 @@ export type {
 
 export type { MetaOption, MetaOptions } from "./metaService";
 export type { ReverseGeocodeResponse } from "./utilsService";
+export type { SpotListItem, SpotDetail, CreateSpotItem, CreateSpotsRequest } from "./recordService";
