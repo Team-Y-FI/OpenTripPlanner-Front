@@ -31,7 +31,7 @@ export default function CourseGenerationListener() {
         position: 'top',
         visibilityTime: 3000,
       });
-      router.replace('/(tabs)/results');
+      router.push('/(tabs)/results');
     } else if (courseGenerationStatus === 'error') {
       Toast.show({
         type: 'error',

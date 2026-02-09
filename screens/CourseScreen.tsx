@@ -259,17 +259,42 @@ export default function CourseWeb() {
     }
 
     const noAddressText = '주소를 찾을 수 없습니다';
-    if (!window.kakao || !window.kakao.maps) {
-      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-      return;
-    }
     setReverseGeocoding(true);
+
     try {
+      // 1순위: 카카오 JS SDK로 바로 역지오코딩 (웹에서 훨씬 빠름)
+      let addrFromKakao: string | null = null;
+      if (window.kakao?.maps?.services) {
+        addrFromKakao = await new Promise<string | null>((resolve) => {
+          const geocoder = new window.kakao.maps.services.Geocoder();
+          geocoder.coord2Address(lng, lat, (result: any[], status: any) => {
+            if (status === window.kakao.maps.services.Status.OK && result[0]) {
+              const road = result[0].road_address?.address_name;
+              const jibun = result[0].address?.address_name;
+              resolve(road || jibun || null);
+            } else {
+              resolve(null);
+            }
+          });
+        });
+      }
+
+      if (addrFromKakao) {
+        setDraftPlace({ lat, lng, placeName: addrFromKakao, address: addrFromKakao });
+        return;
+      }
+
+      // 2순위: 백엔드 유틸 API (Google/Kakao REST)
       const res = await utilsService.reverseGeocode(lat, lng);
       const addr = res.road_address ?? res.address ?? '';
-      setDraftPlace({ lat, lng, placeName: addr || noAddressText, address: addr });
+
+      if (addr) {
+        setDraftPlace({ lat, lng, placeName: addr, address: addr });
+      } else {
+        setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+      }
     } catch (err) {
-      console.warn('????? ??:', err);
+      console.error('역지오코딩 실패:', err);
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
     } finally {
       setReverseGeocoding(false);
@@ -342,7 +367,9 @@ export default function CourseWeb() {
       : null;
     if (err) return;
     if (!draftPlace) return;
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (Platform.OS !== 'web') {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
     setFormData((prev) => ({
       ...prev,
       fixedSchedules: [
@@ -377,7 +404,9 @@ export default function CourseWeb() {
   };
 
   const removeFixedScheduleItem = (id: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (Platform.OS !== 'web') {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
     setFormData((prev) => ({ ...prev, fixedSchedules: prev.fixedSchedules.filter((item) => item.id !== id) }));
   };
 
@@ -389,7 +418,9 @@ export default function CourseWeb() {
 
   const isFixedSchedule = formData.hasFixedSchedule;
   const setIsFixedSchedule = (v: boolean) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (Platform.OS !== 'web') {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
     setFormField('hasFixedSchedule', v);
   };
 

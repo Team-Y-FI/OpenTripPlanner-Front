@@ -181,17 +181,18 @@ export default function CourseScreen() {
     }
 
     const noAddressText = '주소를 찾을 수 없습니다';
-    if (!GOOGLE_PLACES_API_KEY) {
-      setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
-      return;
-    }
     setReverseGeocoding(true);
     try {
       const res = await utilsService.reverseGeocode(lat, lng);
       const addr = res.road_address ?? res.address ?? '';
-      setDraftPlace({ lat, lng, placeName: addr || noAddressText, address: addr });
+      if (addr) {
+        setDraftPlace({ lat, lng, placeName: addr, address: addr });
+      } else {
+        // 주소가 없을 때만 기본 메시지 표시
+        setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+      }
     } catch (err) {
-      console.warn('????? ??:', err);
+      console.error('역지오코딩 실패:', err);
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
     } finally {
       setReverseGeocoding(false);

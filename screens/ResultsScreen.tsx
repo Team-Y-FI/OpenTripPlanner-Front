@@ -84,7 +84,7 @@ const getOrderMarker = (index: number): string => {
 
 // 카테고리별 아이콘 매핑
 const getCategoryIcon = (category: string): string => {
-  const cat = category.toLowerCase();
+  const cat = (category || '').toLowerCase();
   if (cat.includes('카페') || cat.includes('커피')) return 'cafe';
   if (cat.includes('음식') || cat.includes('맛집') || cat.includes('식당')) return 'restaurant';
   if (cat.includes('쇼핑')) return 'bag';
@@ -99,7 +99,7 @@ const getCategoryIcon = (category: string): string => {
 
 // 카테고리별 색상
 const getCategoryColor = (category: string): { bg: string; text: string; accent: string } => {
-  const cat = category.toLowerCase();
+  const cat = (category || '').toLowerCase();
   if (cat.includes('카페') || cat.includes('커피')) return { bg: '#fef3c7', text: '#92400e', accent: '#f59e0b' };
   if (cat.includes('음식') || cat.includes('맛집') || cat.includes('식당')) return { bg: '#fee2e2', text: '#991b1b', accent: '#ef4444' };
   if (cat.includes('쇼핑')) return { bg: '#fce7f3', text: '#9d174d', accent: '#ec4899' };
@@ -119,6 +119,13 @@ const extractTravelInfo = (transit: string[]): { distance: string | null; durati
   let totalMinutes = 0;
 
   for (const t of transit) {
+    // 출발 전 여유 시간 처리
+    const leisureMatch = t.match(/여유\s*[:\s]*(\d+)\s*분/);
+    if (leisureMatch) {
+      totalMinutes += parseInt(leisureMatch[1]);
+      mode = 'wait';
+      continue;
+    }
     // 대기 시간 처리 (가장 먼저 체크)
     const waitMatch = t.match(/대기\s*[:\s]*(\d+)\s*분/);
     if (waitMatch) {
@@ -228,11 +235,17 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
   let fromStation: string | null = null;
   let toStation: string | null = null;
 
-  // 대기: "대기 : 3분" 또는 "대기 3분" (가장 먼저 체크)
-  const waitMatch = cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/);
-  if (waitMatch) {
+  // 출발 전 여유: "출발 전 여유 : 120분"
+  const leisureMatch = cleanRaw.match(/여유\s*[:\s]*(\d+)\s*분/);
+  if (leisureMatch) {
     type = 'wait';
-    duration = `${waitMatch[1]}분`;
+    duration = `${leisureMatch[1]}분`;
+  }
+  // 대기: "대기 : 3분" 또는 "대기 3분" 또는 "현장 대기 : 10분" (가장 먼저 체크)
+  else if (cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/)) {
+    const waitMatch = cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/);
+    type = 'wait';
+    duration = waitMatch ? `${waitMatch[1]}분` : null;
   }
   // 도보: "도보 : 2분" 또는 "도보 2분"
   else if (cleanRaw.match(/도보\s*[:\s]*(\d+)\s*분/)) {
@@ -362,7 +375,7 @@ const getCourseOrderColor = (level?: string): string => {
 
 // 카테고리별 예상 체류 시간 (분)
 const getEstimatedDuration = (category: string): number => {
-  const cat = category.toLowerCase();
+  const cat = (category || '').toLowerCase();
   if (cat.includes('카페') || cat.includes('커피')) return 30;
   if (cat.includes('음식') || cat.includes('맛집') || cat.includes('식당')) return 60;
   if (cat.includes('쇼핑')) return 45;
@@ -959,15 +972,19 @@ export default function ResultsScreen() {
     }
 
     // timeline이 비어있으면 route 데이터를 timeline 형태로 변환
-    const routeAsTimeline: TimelineItem[] = currentDayData.route.map((item, index) => ({
-      name: item.name,
-      category: item.category,
-      category2: item.category2,
-      time: '', // 시간 정보 없음
-      transit_to_here: [],
-      population_level: undefined,
-      traffic_level: undefined,
-    }));
+    const routeAsTimeline: TimelineItem[] = currentDayData.route.map((item: any, index) => {
+      // 고정일정: name/category가 없고 title/place_name이 있는 항목
+      const isFixed = !item.name && (item.title !== undefined || item.place_name);
+      return {
+        name: isFixed ? (item.title || '고정일정') : (item.name || ''),
+        category: isFixed ? '고정일정' : (item.category || ''),
+        category2: item.category2,
+        time: isFixed ? `${item.start_time || ''} - ${item.end_time || ''}` : '',
+        transit_to_here: [],
+        population_level: undefined,
+        traffic_level: undefined,
+      };
+    });
 
     return routeAsTimeline;
   }, [currentDayData]);
@@ -994,11 +1011,14 @@ export default function ResultsScreen() {
         locations.push({ lat: accommodationItem.lat, lng: accommodationItem.lng, name: item.name, category: item.category });
         return;
       }
-      // 고정 일정: title로 검색 (route 배열에 고정 일정이 title 필드로 저장됨)
-      const fixedEventItem = currentDayData.route.find((r: any) => r.title === item.name);
+      // 고정 일정: route에서 start_time/end_time이 있는 고정일정 항목을 찾음
+      // title 매칭 또는 카테고리가 '고정일정'이면 route에서 고정일정 구조를 가진 항목 검색
+      const fixedEventItem = currentDayData.route.find((r: any) =>
+        r.title === item.name ||
+        (item.category === '고정일정' && r.start_time && r.end_time && !r.name)
+      );
       if (fixedEventItem && fixedEventItem.lat && fixedEventItem.lng) {
         const placeName = (fixedEventItem as any).place_name || (fixedEventItem as any).address || '';
-        // 고정일정의 마커 이름: title이 있으면 사용, 없거나 장소명과 같으면 '고정일정'으로 표시
         const displayName = (fixedEventItem as any).title && (fixedEventItem as any).title !== placeName
           ? (fixedEventItem as any).title
           : '고정일정';
@@ -1393,14 +1413,14 @@ export default function ResultsScreen() {
               >
                 <View style={styles.timelineContainer}>
                   {timeline.map((item, idx) => {
-                    const travelInfo = idx > 0 ? extractTravelInfo(item.transit_to_here) : null;
+                    const travelInfo = (idx > 0 || (item.transit_to_here?.length > 0 && item.category !== '고정일정')) ? extractTravelInfo(item.transit_to_here) : null;
                     const isHovered = hoveredItem === idx;
                     const isTransitExpanded = expandedTransit === idx;
 
                     return (
                       <View key={`place-${idx}`}>
-                        {/* 이동 구간 (첫 번째 아이템 제외, 편집 모드가 아닐 때만) */}
-                        {idx > 0 && travelInfo && !isEditMode && (
+                        {/* 이동 구간 (transit_to_here 데이터가 있으면 표시, 편집 모드가 아닐 때만) */}
+                        {travelInfo && !isEditMode && (
                           <Pressable
                             style={styles.travelSection}
                             onPress={() => setExpandedTransit(isTransitExpanded ? null : idx)}
@@ -1509,10 +1529,10 @@ export default function ResultsScreen() {
                                     <View style={styles.transitStepRight}>
                                       <View style={styles.transitStepHeader}>
                                         <Text style={[styles.transitStepType, { color: accentColor }]}>
-                                          {step.type === 'walk' ? '도보' : 
-                                           step.type === 'bus' ? '버스' : 
-                                           step.type === 'subway' ? '지하철' : 
-                                           step.type === 'wait' ? '대기' : 
+                                          {step.type === 'walk' ? '도보' :
+                                           step.type === 'bus' ? '버스' :
+                                           step.type === 'subway' ? '지하철' :
+                                           step.type === 'wait' ? (step.rawText.includes('여유') ? '출발 전 여유' : step.rawText.includes('현장') ? '현장 대기' : '대기') :
                                            step.type === 'car' ? '승용차' : '이동'}
                                         </Text>
                                         {step.duration && (
