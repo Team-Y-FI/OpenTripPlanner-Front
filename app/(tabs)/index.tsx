@@ -463,8 +463,8 @@ export default function HomeScreen() {
                         const timelines = dayPlan.timelines?.fastest_version || dayPlan.timelines?.min_transfer_version || [];
                         timelines.forEach((item: any) => {
                           if (
-                            (item.traffic_level && typeof item.traffic_level === 'string' && item.traffic_level.includes('🔴정체')) ||
-                            (item.population_level && typeof item.population_level === 'string' && item.population_level.includes('🔴혼잡'))
+                            (item.traffic_level && typeof item.traffic_level === 'string' && item.traffic_level.includes('🔴')) ||
+                            (item.population_level && typeof item.population_level === 'string' && item.population_level.includes('🔴'))
                           ) {
                             congestionCount++;
                           }
