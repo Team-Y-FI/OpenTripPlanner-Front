@@ -1286,12 +1286,12 @@ export default function ResultsScreen() {
           <Pressable style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="chevron-back" size={24} color="#0f172a" />
           </Pressable>
-          <View style={styles.headerInfo}>
+          <Pressable style={styles.headerInfo} onPress={() => router.push('/')}>
             <Text style={styles.headerTitle}>{planData.summary.region} 코스 추천</Text>
             <Text style={styles.headerSubtitle}>
               {planData.summary.start_date} ~ {planData.summary.end_date} · {dayKeys.length}일
             </Text>
-          </View>
+          </Pressable>
           <View style={styles.headerActions}>
             {!isEditMode && (
               <>
