@@ -479,12 +479,12 @@ export default function UploadScreen() {
         <Pressable onPress={handleBack} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#64748b" />
         </Pressable>
-        <View style={styles.headerContent}>
+        <Pressable style={styles.headerContent} onPress={() => router.push('/')}>
           <LinearGradient colors={['#6366f1', '#38bdf8']} style={styles.logo}>
             <Text style={styles.logoText}>O</Text>
           </LinearGradient>
           <Text style={styles.headerTitle}>OpenTripPlanner</Text>
-        </View>
+        </Pressable>
         <Pressable onPress={() => router.push('/records')}>
           <Text style={styles.headerLink}>내 기록 보기</Text>
         </Pressable>
