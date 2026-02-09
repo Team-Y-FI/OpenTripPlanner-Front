@@ -27,6 +27,7 @@ export interface CreateCourseRequest {
   transport_mode: "walkAndPublic" | "car"; // 이동수단
   category: "attraction" | "culture" | "shopping" | "restaurant" | "cafe";
   categories?: string[];
+  purposes?: string[];
 }
 
 // 장소 정보 타입

@@ -493,6 +493,15 @@ export default function CourseWeb() {
     쇼핑: "shopping",
   };
 
+  const purposeMap: Record<string, string> = {
+    데이트: "date",
+    "혼자 시간": "solo",
+    친구들과: "friends",
+    "가족 나들이": "family",
+    "사진 찍기": "photo",
+    "맛집 위주": "gourmet",
+  };
+
   const togglePurpose = (purpose: string) => {
     setSelectedPurposes((prev) =>
       prev.includes(purpose)
@@ -742,6 +751,10 @@ export default function CourseWeb() {
       (cat) => categoryMap[cat] || "attraction",
     );
 
+    const mappedPurposes = selectedPurposes.map(
+      (purpose) => purposeMap[purpose] || "general",
+    );
+
     const requestData: CreateCourseRequest = {
       region: selectedDistrict || "서울특별시",
       start_date: formData.startDate,
@@ -752,6 +765,7 @@ export default function CourseWeb() {
       transport_mode: selectedMove === "car" ? "car" : "walkAndPublic",
       category: selectedApiCategory,
       categories: mappedCategories,
+      purposes: mappedPurposes,
     };
 
     setIsGenerating(true);
