@@ -16,6 +16,13 @@ const { width } = Dimensions.get('window');
 
 const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
 
+const resolveStorageUrl = (url?: string | null) => {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith('/')) return `${STORAGE_BASE}${url}`;
+  return `${STORAGE_BASE}/${url}`;
+};
+
 const PICKER_MEDIA_TYPES: ImagePicker.MediaType[] = ['images'];
 
 interface ExifData {
@@ -281,7 +288,7 @@ export default function UploadScreen() {
       // 업로드된 사진들을 상태에 추가
       const newPhotos: PhotoData[] = response.photos.map((photo) => ({
         ...photo,
-        thumbnail_url: photo.thumbnail_url ? `${STORAGE_BASE}${photo.thumbnail_url}` : null,
+        thumbnail_url: resolveStorageUrl(photo.thumbnail_url),
       }));
 
       setUploadId(response.upload_id);
@@ -422,7 +429,7 @@ export default function UploadScreen() {
                 place: response.place,
                 status: 'recognized' as const,
                 memo: memoValue ? memoValue : null,
-                thumbnail_url: response.thumbnail_url ? `${STORAGE_BASE}${response.thumbnail_url}` : photo.thumbnail_url,
+                thumbnail_url: resolveStorageUrl(response.thumbnail_url) ?? photo.thumbnail_url,
               }
             : photo
         )
