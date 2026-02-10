@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Animated } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Animated, Image, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -7,16 +7,36 @@ import { usePlaces } from '@/contexts/PlacesContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
 import { useNetwork } from '@/contexts/NetworkContext';
-import { planService, SavedPlanListItem, SavedPlanDetailResponse, CreateCourseResponse } from '@/services';
+import { planService, recordService, API_URL, SavedPlanListItem, SavedPlanDetailResponse, CreateCourseResponse, type SpotListItem } from '@/services';
+import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import ConfirmModal from '@/components/ConfirmModal';
 import FullScreenLoader from '@/components/FullScreenLoader';
 
 const { width } = Dimensions.get('window');
+const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
+
+const resolveStorageUrl = (url?: string | null) => {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith('/')) return `${STORAGE_BASE}${url}`;
+  return `${STORAGE_BASE}/${url}`;
+};
+
+const formatDate = (value?: string | null) => {
+  if (!value) return '날짜 없음';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return value;
+  }
+};
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { clearPlaces, isCourseGenerating, courseGenerationStatus, clearCourseGenerationStatus, lastGeneratedPlan } = usePlaces();
+  const { clearPlaces, isCourseGenerating, courseGenerationStatus, clearCourseGenerationStatus, lastGeneratedPlan, setLastGeneratedPlan } = usePlaces();
   const { user, logout } = useAuth();
   const { startGlobalLoading, endGlobalLoading } = useSession();
   const { isOnline: _isOnline } = useNetwork();
@@ -29,6 +49,9 @@ export default function HomeScreen() {
   const [recentCourseDetail, setRecentCourseDetail] = useState<SavedPlanDetailResponse | null>(null);
   const [pulseAnim] = useState(new Animated.Value(1));
   const [selectedDay, setSelectedDay] = useState<string | null>(null); // 선택된 일자 (day1, day2 등)
+  const [savedPlans, setSavedPlans] = useState<SavedPlanListItem[]>([]);
+  const [spots, setSpots] = useState<SpotListItem[]>([]);
+  const [openingPlanId, setOpeningPlanId] = useState<string | null>(null);
 
   // 방금 생성된 플랜 (저장 전이라도 바로 표시)
   const generatedPlan = lastGeneratedPlan as CreateCourseResponse | null;
@@ -113,13 +136,18 @@ export default function HomeScreen() {
     }
 
     try {
-      // 저장된 플랜 목록 조회 (최근 5개)
-      const response = await planService.getSavedPlans(5);
-      const plans = response.items || [];
+      // 저장된 플랜 목록 조회 (최근 3개) + 개인 기록 조회 (최근 3개) 병렬
+      const [plansResponse, spotsResponse] = await Promise.all([
+        planService.getSavedPlans(3),
+        recordService.listSpots({ limit: 3 }),
+      ]);
 
+      const plans = plansResponse.items || [];
+      setSavedPlans(plans);
+      setSpots(spotsResponse.items || []);
       setUserPlansCount(plans.length);
 
-      // 가장 최근 플랜 설정
+      // 가장 최근 플랜 설정 (히어로 카드용)
       if (plans.length > 0) {
         setRecentPlan(plans[0]);
 
@@ -139,6 +167,8 @@ export default function HomeScreen() {
       console.error('데이터 로딩 실패:', error);
       setRecentPlan(null);
       setRecentCourseDetail(null);
+      setSavedPlans([]);
+      setSpots([]);
       setUserPlansCount(0);
     } finally {
       setIsLoadingData(false);
@@ -147,6 +177,32 @@ export default function HomeScreen() {
       }
     }
   };
+
+  const handleOpenSavedPlan = useCallback(async (savedPlanId: string) => {
+    if (openingPlanId) return;
+    setOpeningPlanId(savedPlanId);
+    try {
+      const detail = await planService.getSavedPlanDetail(savedPlanId);
+      const rawVariants = (detail.variants || {}) as Record<string, any>;
+      const variantsSummary = rawVariants.summary as any | undefined;
+      const { summary: _ignore, ...variants } = rawVariants;
+      const summary = {
+        region: variantsSummary?.region ?? detail.region ?? detail.summary?.region ?? '',
+        start_date: variantsSummary?.start_date ?? detail.date ?? '',
+        end_date: variantsSummary?.end_date ?? detail.date ?? '',
+        transport: variantsSummary?.transport ?? detail.summary?.transport ?? '',
+        crowd_mode: variantsSummary?.crowd_mode ?? detail.summary?.crowd_mode ?? '',
+        transport_mode: variantsSummary?.transport_mode ?? 'walkAndPublic',
+      };
+      setLastGeneratedPlan({ plan_id: detail.plan_id, summary, variants });
+      router.push('/(tabs)/results');
+    } catch (error) {
+      console.error('플랜 불러오기 실패:', error);
+      Toast.show({ type: 'error', text1: '불러오기 실패', text2: '플랜을 불러오는 중 오류가 발생했습니다.' });
+    } finally {
+      setOpeningPlanId(null);
+    }
+  }, [openingPlanId, router, setLastGeneratedPlan]);
 
   const handleLogout = () => {
     setShowLogoutModal(true);
@@ -611,110 +667,113 @@ export default function HomeScreen() {
             </>
           )}
         </Pressable>
-      </View>
-
-      {/* 진입 방식 선택 */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>1. 어떻게 시작할까요?</Text>
-
-        <View style={styles.entryCards}>
-          {/* 새 플랜 */}
-          <Pressable style={styles.entryCard} onPress={() => {
-            clearPlaces();
-            router.push('/course');
-          }}>
-            <View style={styles.entryCardHeader}>
-              <View>
-                <Text style={styles.entryCardTag}>새로운 여행 계획</Text>
-                <Text style={styles.entryCardTitle}>빈 캘린더에서 시작</Text>
-                <Text style={styles.entryCardDesc}>
-                  목적 · 지역 · 교통수단 · 예산만 입력하면{'\n'}
-                  추천 스팟과 최적 동선을 자동으로 만들어 드려요.
-                </Text>
-              </View>
-              <Text style={styles.entryCardArrow}>→</Text>
-            </View>
-            <View style={styles.entryCardTags}>
-              <View style={styles.entryTag}>
-                <Text style={styles.entryTagText}>3시간 / 반나절 / 1일</Text>
-              </View>
-              <View style={styles.entryTag}>
-                <Text style={styles.entryTagText}>도보 · 대중교통 · 차량</Text>
-              </View>
-              <View style={styles.entryTag}>
-                <Text style={styles.entryTagText}>혼잡도·교통 반영</Text>
-              </View>
-            </View>
-          </Pressable>
-
-          {/* 사진 기록 */}
-          <Pressable style={styles.entryCard} onPress={() => router.push('/upload')}>
-            <View style={styles.entryCardHeader}>
-              <View>
-                <Text style={[styles.entryCardTag, styles.entryCardTagGreen]}>사진 기반 기록</Text>
-                <Text style={styles.entryCardTitle}>사진으로 장소부터 기록</Text>
-                <Text style={styles.entryCardDesc}>
-                  여행 사진을 올리면 위치를 자동 인식하고,{'\n'}
-                  내 지도에 스팟과 개인 기록으로 차곡차곡 쌓여요.
-                </Text>
-              </View>
-              <Text style={styles.entryCardArrow}>→</Text>
-            </View>
-            <View style={styles.entryCardTags}>
-              <View style={styles.entryTag}>
-                <Text style={styles.entryTagText}>EXIF 위치 자동 읽기</Text>
-              </View>
-              <View style={styles.entryTag}>
-                <Text style={styles.entryTagText}>지도에서 직접 핀 지정</Text>
-              </View>
-              <View style={styles.entryTag}>
-                <Text style={styles.entryTagText}>사진·메모·태그 기록</Text>
-              </View>
-            </View>
-          </Pressable>
         </View>
-      </View>
 
-      {/* 필수 정보 카드 */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>2. 어떤 정보가 필요해요?</Text>
-
-        <View style={styles.infoCard}>
-          <View style={styles.infoColumn}>
-            <View style={styles.infoHeader}>
-              <View style={styles.infoNumber}>
-                <Text style={styles.infoNumberText}>①</Text>
-              </View>
-              <Text style={styles.infoTitle}>여행 기본 정보</Text>
+      {/* 저장된 플랜 섹션 */}
+      {user && (
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons name="bookmark" size={18} color="#6366f1" />
+              <Text style={styles.sectionTitleText}>저장된 플랜</Text>
             </View>
-            <Text style={styles.infoItem}>· 지역 / 목적 (데이트, 혼자, 가족 등)</Text>
-            <Text style={styles.infoItem}>· 날짜 / 시작 시간</Text>
-            <Text style={styles.infoItem}>· 교통수단 (도보 / 대중교통 / 차량)</Text>
+            <Pressable onPress={() => router.push('/records?tab=plans')} style={styles.moreButton}>
+              <Text style={styles.moreButtonText}>더보기</Text>
+              <Ionicons name="chevron-forward" size={14} color="#6366f1" />
+            </Pressable>
           </View>
 
-          <View style={styles.infoColumn}>
-            <View style={styles.infoHeader}>
-              <View style={styles.infoNumber}>
-                <Text style={styles.infoNumberText}>②</Text>
-              </View>
-              <Text style={styles.infoTitle}>코스 조건</Text>
+          {savedPlans.length === 0 ? (
+            <View style={styles.emptySection}>
+              <Text style={styles.emptySectionText}>저장된 플랜이 없습니다</Text>
+              <Text style={styles.emptySectionSubtext}>추천 결과에서 플랜을 저장해보세요.</Text>
             </View>
-            <Text style={styles.infoItem}>· 카테고리 (카페, 전시, 자연 등)</Text>
-            <Text style={styles.infoItem}>· 이동 속도 / 휴식 선호</Text>
-          </View>
-
-          <View style={styles.infoColumn}>
-            <View style={styles.infoHeader}>
-              <View style={styles.infoNumber}>
-                <Text style={styles.infoNumberText}>③</Text>
-              </View>
-              <Text style={styles.infoTitle}>결과 확인 & 공유</Text>
-            </View>
-            <Text style={styles.infoItem}>· 혼잡·교통 경고 확인</Text>
-            <Text style={styles.infoItem}>· 플랜 저장 & URL 공유</Text>
-          </View>
+          ) : (
+            savedPlans.map((plan) => {
+              const isOpening = openingPlanId === plan.saved_plan_id;
+              const title = plan.title || `${plan.region} 여행`;
+              const isBusy = openingPlanId !== null;
+              return (
+                <Pressable
+                  key={plan.saved_plan_id}
+                  style={[styles.savedPlanCard, isBusy && { opacity: 0.6 }]}
+                  onPress={() => handleOpenSavedPlan(plan.saved_plan_id)}
+                  disabled={isBusy}
+                >
+                  <View style={styles.savedPlanCardLeft}>
+                    <View style={styles.savedPlanIcon}>
+                      <Ionicons name="map" size={16} color="#6366f1" />
+                    </View>
+                    <View style={styles.savedPlanInfo}>
+                      <Text style={styles.savedPlanTitle} numberOfLines={1}>{title}</Text>
+                      <Text style={styles.savedPlanMeta}>{plan.region} · {plan.date}</Text>
+                    </View>
+                  </View>
+                  {isOpening ? (
+                    <ActivityIndicator size="small" color="#6366f1" />
+                  ) : (
+                    <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
+                  )}
+                </Pressable>
+              );
+            })
+          )}
         </View>
-      </View>
+      )}
+
+      {/* 개인 기록 섹션 */}
+      {user && (
+        <View style={styles.sectionContainer}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={styles.sectionTitleRow}>
+              <Ionicons name="location" size={18} color="#6366f1" />
+              <Text style={styles.sectionTitleText}>개인 기록</Text>
+            </View>
+            <Pressable onPress={() => router.push('/records')} style={styles.moreButton}>
+              <Text style={styles.moreButtonText}>더보기</Text>
+              <Ionicons name="chevron-forward" size={14} color="#6366f1" />
+            </Pressable>
+          </View>
+
+          {spots.length === 0 ? (
+            <View style={styles.emptySection}>
+              <Text style={styles.emptySectionText}>등록된 기록이 없습니다</Text>
+              <Text style={styles.emptySectionSubtext}>사진 업로드 후 장소를 등록해보세요.</Text>
+            </View>
+          ) : (
+            spots.map((spot) => {
+              const thumbnailUrl = resolveStorageUrl(spot.thumbnail_url);
+              return (
+                <Pressable
+                  key={spot.spot_id}
+                  style={styles.spotCard}
+                  onPress={() => router.push(`/record?spot_id=${spot.spot_id}`)}
+                >
+                  <View style={styles.spotThumbnail}>
+                    {thumbnailUrl ? (
+                      <Image source={{ uri: thumbnailUrl }} style={styles.spotThumbnailImage} />
+                    ) : (
+                      <LinearGradient colors={['#e0e7ff', '#c7d2fe']} style={styles.spotThumbnailPlaceholder}>
+                        <Ionicons name="image-outline" size={20} color="#818cf8" />
+                      </LinearGradient>
+                    )}
+                  </View>
+                  <View style={styles.spotInfo}>
+                    <Text style={styles.spotName} numberOfLines={1}>{spot.place.name}</Text>
+                    <Text style={styles.spotAddress} numberOfLines={1}>{spot.place.address || '주소 없음'}</Text>
+                    <View style={styles.spotMetaRow}>
+                      <Text style={styles.spotDate}>{formatDate(spot.visited_at)}</Text>
+                      <Text style={styles.spotCategory}>{spot.place.category || '기타'}</Text>
+                    </View>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
+                </Pressable>
+              );
+            })
+          )}
+        </View>
+      )}
+
       </ScrollView>
 
       {/* 로그아웃 확인 모달 */}
@@ -1725,5 +1784,172 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     lineHeight: 20,
+  },
+
+  // ── 저장된 플랜 & 개인 기록 섹션 ──
+  sectionContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 8,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sectionTitleText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  moreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  moreButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6366f1',
+  },
+  emptySection: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 24,
+    alignItems: 'center',
+    gap: 4,
+  },
+  emptySectionText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#94a3b8',
+  },
+  emptySectionSubtext: {
+    fontSize: 12,
+    color: '#cbd5e1',
+  },
+
+  // 저장된 플랜 카드
+  savedPlanCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 14,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  savedPlanCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+  },
+  savedPlanIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#eef2ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  savedPlanInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  savedPlanTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  savedPlanMeta: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+
+  // 개인 기록 카드
+  spotCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  spotThumbnail: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  spotThumbnailImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+  },
+  spotThumbnailPlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  spotInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  spotName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  spotAddress: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  spotMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  spotDate: {
+    fontSize: 11,
+    color: '#cbd5e1',
+  },
+  spotCategory: {
+    fontSize: 11,
+    color: '#6366f1',
+    fontWeight: '500',
+    backgroundColor: '#eef2ff',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
 });

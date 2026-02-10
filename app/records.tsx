@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Image, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { usePlaces } from '@/contexts/PlacesContext';
@@ -32,9 +32,10 @@ const formatDate = (value?: string | null) => {
 
 export default function RecordsScreen() {
   const router = useRouter();
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
   const { user } = useAuth();
   const { setSelectedPlaces, setLastGeneratedPlan } = usePlaces();
-  const [activeTab, setActiveTab] = useState('spots');
+  const [activeTab, setActiveTab] = useState(tab === 'plans' ? 'plans' : 'spots');
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [spots, setSpots] = useState<SpotListItem[]>([]);
@@ -182,6 +183,8 @@ export default function RecordsScreen() {
   }, [openingPlanId, router, setLastGeneratedPlan]);
 
   const handleDeleteSelected = () => {
+    console.log(selectedSpotIds);
+    
     const ids = Array.from(selectedSpotIds);
     if (ids.length === 0) {
       Toast.show({
