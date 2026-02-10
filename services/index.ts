@@ -21,6 +21,7 @@ export type {
   CreateCourseResponse,
   GetCourseResponse,
   Place,
+  SelectedPlace,
   TimelineItem,
   DayPlan,
   SavedPlanListItem,

@@ -532,7 +532,7 @@ export default function CourseScreen() {
         : 'attraction';
 
     const requestData: CreateCourseRequest = {
-            region: selectedDistrict || '서울특별시',
+      region: selectedDistrict || '서울특별시',
       start_date: formData.startDate,
       end_date: formData.endDate,
       first_day_start_time: formData.firstDayStartTime,
@@ -540,6 +540,15 @@ export default function CourseScreen() {
       fixed_events: fixedEvents,
       transport_mode: selectedMove === 'car' ? 'car' : 'walkAndPublic',
       category: selectedApiCategory,
+      selected_places: selectedPlaces.length > 0
+        ? selectedPlaces.map((p) => ({
+            name: p.placeName,
+            address: p.placeAddress,
+            category: p.category,
+            lat: p.lat,
+            lng: p.lng,
+          }))
+        : undefined,
     };
 
     setIsGenerating(true);
@@ -593,6 +602,50 @@ export default function CourseScreen() {
         {/* 여행 기본 정보 (지도는 여기서 표시) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>1. 여행 기본 정보</Text>
+
+          {/* 선택된 장소 (개인 기록에서 선택한 장소) */}
+          {selectedPlaces.length > 0 && (
+            <View style={styles.selectedPlacesSection}>
+              <View style={styles.selectedPlacesHeader}>
+                <Text style={styles.selectedPlacesTitle}>
+                  선택된 장소 ({selectedPlaces.length})
+                </Text>
+                <Text style={styles.selectedPlacesSubtitle}>
+                  이 장소들을 코스에 만들어요
+                </Text>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.selectedPlacesScroll}
+              >
+                {selectedPlaces.map((place, index) => (
+                  <View key={place.id} style={styles.selectedPlaceCardNew}>
+                    <View style={styles.selectedPlaceIndexBadge}>
+                      <Text style={styles.selectedPlaceIndexText}>{index + 1}</Text>
+                    </View>
+                    <View style={styles.selectedPlaceInfoNew}>
+                      <Text style={styles.selectedPlaceNameNew} numberOfLines={1}>
+                        {place.placeName}
+                      </Text>
+                      {place.placeAddress ? (
+                        <Text style={styles.selectedPlaceAddressNew} numberOfLines={1}>
+                          {place.placeAddress}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Pressable
+                      style={styles.selectedPlaceRemoveBtn}
+                      onPress={() => removePlace(place.id)}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
           <View style={styles.inputGroup}>
             <Text style={styles.label}>지역 선택</Text>
             <Pressable
@@ -897,27 +950,6 @@ export default function CourseScreen() {
           )}
         </View>
 
-        {/* 선택된 장소 (지도에서 선택한 장소) */}
-        {selectedPlaces.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>선택된 장소 ({selectedPlaces.length})</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.placeCardScroll}>
-              {selectedPlaces.map((place, i) => (
-                <View key={place.id} style={styles.placeCard}>
-                  <View style={styles.placeIndex}><Text style={styles.placeIndexText}>{i + 1}</Text></View>
-                  <View style={styles.placeInfo}>
-                    <Text style={styles.placeName} numberOfLines={1}>{place.placeName}</Text>
-                    <Text style={styles.placeAddr} numberOfLines={1}>{place.placeAddress || '주소 정보 없음'}</Text>
-                  </View>
-                  <Pressable style={styles.placeRemove} onPress={() => removePlace(place.id)}>
-                    <Ionicons name="trash" size={16} color="#ef4444" />
-                  </Pressable>
-                </View>
-              ))}
-            </ScrollView>
-          </View>
-        )}
-        
         <View style={styles.section}>
           <View style={styles.inputGroup}>
             <Text style={styles.label}>여행 목적</Text>
@@ -1417,6 +1449,84 @@ export default function CourseScreen() {
 }
 
 const styles = StyleSheet.create({
+  selectedPlacesSection: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: '#c7d2fe',
+  },
+  selectedPlacesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  selectedPlacesTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#312e81',
+  },
+  selectedPlacesSubtitle: {
+    fontSize: 11,
+    color: '#818cf8',
+    fontWeight: '500',
+  },
+  selectedPlacesScroll: {
+    gap: 10,
+    paddingRight: 4,
+  },
+  selectedPlaceCardNew: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    minWidth: 200,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    gap: 12,
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  selectedPlaceIndexBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#6366f1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedPlaceIndexText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  selectedPlaceInfoNew: {
+    flex: 1,
+    gap: 3,
+  },
+  selectedPlaceNameNew: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  selectedPlaceAddressNew: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  selectedPlaceRemoveBtn: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
   safeArea: {
     flex: 1,
     backgroundColor: '#ffffff',
