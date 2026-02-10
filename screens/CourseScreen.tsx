@@ -199,7 +199,7 @@ function isStartDateValid(startDate: string): boolean {
 
 export default function CourseWeb() {
   const router = useRouter();
-  const { resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan, isCourseGenerating, setIsCourseGenerating, reportCourseGenerationComplete } = usePlaces();
+  const { resetPlanForm, clearGeneratedPlan, setLastGeneratedPlan, isCourseGenerating, setIsCourseGenerating, reportCourseGenerationComplete, selectedPlaces, removePlace } = usePlaces();
   const [selectedMove, setSelectedMove] = useState('walkAndPublic');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPurposes, setSelectedPurposes] = useState<string[]>([]);
@@ -816,6 +816,15 @@ export default function CourseWeb() {
       category: selectedApiCategory,
       categories: mappedCategories,
       purposes: mappedPurposes,
+      selected_places: selectedPlaces.length > 0
+        ? selectedPlaces.map((p) => ({
+            name: p.placeName,
+            address: p.placeAddress,
+            category: p.category,
+            lat: p.lat,
+            lng: p.lng,
+          }))
+        : undefined,
     };
 
     setIsGenerating(true);
@@ -873,6 +882,49 @@ export default function CourseWeb() {
         {/* 여행 기본 정보 */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>1. 여행 기본 정보</Text>
+
+          {/* 선택된 장소 (개인 기록에서 선택한 장소) */}
+          {selectedPlaces.length > 0 && (
+            <View style={styles.selectedPlacesSection}>
+              <View style={styles.selectedPlacesHeader}>
+                <Text style={styles.selectedPlacesTitle}>
+                  선택된 장소 ({selectedPlaces.length})
+                </Text>
+                <Text style={styles.selectedPlacesSubtitle}>
+                  이 장소들을 코스에 만들어요
+                </Text>
+              </View>
+              <style dangerouslySetInnerHTML={{ __html: `.sp-scroll::-webkit-scrollbar{height:4px} .sp-scroll::-webkit-scrollbar-track{background:transparent} .sp-scroll::-webkit-scrollbar-thumb{background:#c7d2fe;border-radius:4px} .sp-scroll::-webkit-scrollbar-thumb:hover{background:#a5b4fc} .sp-scroll{scrollbar-width:thin;scrollbar-color:#c7d2fe transparent;}` }} />
+              <div className="sp-scroll" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 6 }}>
+                <div style={{ display: 'flex', flexDirection: 'row', gap: 10 }}>
+                  {selectedPlaces.map((place, index) => (
+                    <View key={place.id} style={styles.selectedPlaceCard}>
+                      <View style={styles.selectedPlaceIndex}>
+                        <Text style={styles.selectedPlaceIndexText}>{index + 1}</Text>
+                      </View>
+                      <View style={styles.selectedPlaceInfo}>
+                        <Text style={styles.selectedPlaceName} numberOfLines={1}>
+                          {place.placeName}
+                        </Text>
+                        {place.placeAddress ? (
+                          <Text style={styles.selectedPlaceAddress} numberOfLines={1}>
+                            {place.placeAddress}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Pressable
+                        style={styles.selectedPlaceRemove}
+                        onPress={() => removePlace(place.id)}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#ef4444" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </div>
+              </div>
+            </View>
+          )}
+
           <View style={styles.inputGroup}>
             <Text style={styles.label}>지역 선택</Text>
             <Pressable
@@ -1618,6 +1670,85 @@ export default function CourseWeb() {
 }
 
 const styles = StyleSheet.create({
+  selectedPlacesSection: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: "#c7d2fe",
+  },
+  selectedPlacesHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  selectedPlacesTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#312e81",
+  },
+  selectedPlacesSubtitle: {
+    fontSize: 12,
+    color: "#818cf8",
+    fontWeight: "500",
+  },
+  selectedPlacesScroll: {
+    gap: 10,
+    paddingRight: 4,
+  },
+  selectedPlaceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minWidth: 240,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    gap: 12,
+    flexShrink: 0,
+    shadowColor: "#6366f1",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  selectedPlaceIndex: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#6366f1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  selectedPlaceIndexText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#ffffff",
+  },
+  selectedPlaceInfo: {
+    flex: 1,
+    gap: 3,
+  },
+  selectedPlaceName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1e293b",
+  },
+  selectedPlaceAddress: {
+    fontSize: 11,
+    color: "#94a3b8",
+  },
+  selectedPlaceRemove: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+  },
   safeArea: {
     flex: 1,
     backgroundColor: "#ffffff",

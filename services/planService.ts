@@ -17,6 +17,15 @@ export interface FixedEvent {
 }
 
 // 코스 생성 요청 타입
+// 선택된 장소 (개인 기록에서 선택)
+export interface SelectedPlace {
+  name: string;
+  address: string;
+  category: string;
+  lat?: number;
+  lng?: number;
+}
+
 export interface CreateCourseRequest {
   region: string; // "종로구"
   start_date: string; // "2026-02-07"
@@ -28,6 +37,7 @@ export interface CreateCourseRequest {
   category: "attraction" | "culture" | "shopping" | "restaurant" | "cafe";
   categories?: string[];
   purposes?: string[];
+  selected_places?: SelectedPlace[]; // 개인 기록에서 선택한 장소
 }
 
 // 장소 정보 타입
