@@ -95,6 +95,10 @@ export interface SavedPlanListItem {
   title: string | null;
   region: string;
   date: string;
+  variants_summary?: {
+    A?: string | null;
+    B?: string | null;
+  };
 }
 
 export interface GetSavedPlansResponse {

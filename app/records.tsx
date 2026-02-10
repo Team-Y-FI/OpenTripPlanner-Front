@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Image, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { usePlaces } from '@/contexts/PlacesContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { API_URL, recordService, type SpotListItem } from '@/services';
+import { API_URL, recordService, planService, type SpotListItem, type SavedPlanListItem } from '@/services';
 
 const { width } = Dimensions.get('window');
 const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
@@ -33,12 +33,15 @@ const formatDate = (value?: string | null) => {
 export default function RecordsScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { setSelectedPlaces } = usePlaces();
+  const { setSelectedPlaces, setLastGeneratedPlan } = usePlaces();
   const [activeTab, setActiveTab] = useState('spots');
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [spots, setSpots] = useState<SpotListItem[]>([]);
   const [selectedSpotIds, setSelectedSpotIds] = useState<Set<string>>(new Set());
+  const [savedPlans, setSavedPlans] = useState<SavedPlanListItem[]>([]);
+  const [isLoadingPlans, setIsLoadingPlans] = useState(false);
+  const [openingPlanId, setOpeningPlanId] = useState<string | null>(null);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -70,11 +73,40 @@ export default function RecordsScreen() {
     }
   }, [user]);
 
+  const loadSavedPlans = useCallback(async () => {
+    if (!user) {
+      setSavedPlans([]);
+      return;
+    }
+    setIsLoadingPlans(true);
+    try {
+      const response = await planService.getSavedPlans(50);
+      setSavedPlans(response.items || []);
+    } catch (error) {
+      console.error('저장된 플랜 로딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '불러오기 실패',
+        text2: '저장된 플랜을 불러오는 중 오류가 발생했습니다.',
+      });
+      setSavedPlans([]);
+    } finally {
+      setIsLoadingPlans(false);
+    }
+  }, [user]);
+
   useFocusEffect(
     useCallback(() => {
       void loadSpots();
-    }, [loadSpots])
+      void loadSavedPlans();
+    }, [loadSpots, loadSavedPlans])
   );
+
+  useEffect(() => {
+    if (activeTab === 'plans') {
+      void loadSavedPlans();
+    }
+  }, [activeTab, loadSavedPlans]);
 
   const toggleSelect = (spotId: string) => {
     setSelectedSpotIds((prev) => {
@@ -110,6 +142,44 @@ export default function RecordsScreen() {
     setSelectedPlaces(mapped);
     router.push('/course');
   };
+
+  const handleOpenSavedPlan = useCallback(async (savedPlanId: string) => {
+    if (openingPlanId) return;
+
+    setOpeningPlanId(savedPlanId);
+    try {
+      const detail = await planService.getSavedPlanDetail(savedPlanId);
+      const rawVariants = (detail.variants || {}) as Record<string, any>;
+      const variantsSummary = rawVariants.summary as any | undefined;
+      const { summary: _ignore, ...variants } = rawVariants;
+
+      const summary = {
+        region: variantsSummary?.region ?? detail.region ?? detail.summary?.region ?? '',
+        start_date: variantsSummary?.start_date ?? detail.date ?? '',
+        end_date: variantsSummary?.end_date ?? detail.date ?? '',
+        transport: variantsSummary?.transport ?? detail.summary?.transport ?? '',
+        crowd_mode: variantsSummary?.crowd_mode ?? detail.summary?.crowd_mode ?? '',
+        transport_mode: variantsSummary?.transport_mode ?? 'walkAndPublic',
+      };
+
+      setLastGeneratedPlan({
+        plan_id: detail.plan_id,
+        summary,
+        variants,
+      });
+
+      router.push('/(tabs)/results');
+    } catch (error) {
+      console.error('플랜 불러오기 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '불러오기 실패',
+        text2: '플랜을 불러오는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setOpeningPlanId(null);
+    }
+  }, [openingPlanId, router, setLastGeneratedPlan]);
 
   const handleDeleteSelected = () => {
     const ids = Array.from(selectedSpotIds);
@@ -168,7 +238,6 @@ export default function RecordsScreen() {
             </LinearGradient>
             <Text style={styles.headerTitle}>OpenTripPlanner</Text>
           </Pressable>
-          <View style={{ width: 40 }} />
         </View>
         <View style={styles.headerButtons}>
           <Pressable style={styles.headerButton} onPress={() => router.push('/upload')}>
@@ -274,14 +343,61 @@ export default function RecordsScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>저장된 여행 플랜</Text>
-              <Text style={styles.sectionCount}>총 0개</Text>
+              <Text style={styles.sectionCount}>총 {savedPlans.length}개</Text>
             </View>
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>저장된 플랜이 없습니다</Text>
-              <Text style={styles.emptyStateSubtext}>추천 결과에서 플랜을 저장해보세요.</Text>
-            </View>
+
+            {isLoadingPlans ? (
+              <View style={styles.loadingState}>
+                <ActivityIndicator size="small" color="#6366f1" />
+                <Text style={styles.loadingText}>저장된 플랜을 불러오는 중...</Text>
+              </View>
+            ) : savedPlans.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>저장된 플랜이 없습니다</Text>
+                <Text style={styles.emptyStateSubtext}>추천 결과에서 플랜을 저장해보세요.</Text>
+              </View>
+            ) : (
+              savedPlans.map((plan) => {
+                const isOpening = openingPlanId === plan.saved_plan_id;
+                const variants = plan.variants_summary;
+                const title = plan.title || `${plan.region} 여행`;
+                const isBusy = openingPlanId !== null;
+
+                return (
+                  <Pressable
+                    key={plan.saved_plan_id}
+                    style={[styles.planCard, isBusy && styles.planCardDisabled]}
+                    onPress={() => handleOpenSavedPlan(plan.saved_plan_id)}
+                    disabled={isBusy}
+                  >
+                    <View style={styles.planHeaderRow}>
+                      <Text style={styles.planTitle} numberOfLines={1}>{title}</Text>
+                      {isOpening ? (
+                        <ActivityIndicator size="small" color="#6366f1" />
+                      ) : (
+                        <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
+                      )}
+                    </View>
+                    <Text style={styles.planMeta}>{plan.region} · {plan.date}</Text>
+                    {variants && (
+                      <View style={styles.planVariantRow}>
+                        <View style={styles.planVariantBadge}>
+                          <Text style={styles.planVariantLabel}>A</Text>
+                          <Text style={styles.planVariantText}>{variants.A || '기본 추천'}</Text>
+                        </View>
+                        <View style={styles.planVariantBadge}>
+                          <Text style={styles.planVariantLabel}>B</Text>
+                          <Text style={styles.planVariantText}>{variants.B || '대체 추천'}</Text>
+                        </View>
+                      </View>
+                    )}
+                  </Pressable>
+                );
+              })
+            )}
           </View>
         )}
+
       </ScrollView>
       </View>
     </SafeAreaView>
@@ -309,7 +425,7 @@ const styles = StyleSheet.create({
   headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
   },
   backButton: {
     padding: 8,
@@ -319,6 +435,8 @@ const styles = StyleSheet.create({
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    marginLeft: 12,
     gap: 10,
   },
   logo: {
@@ -522,7 +640,8 @@ const styles = StyleSheet.create({
   },
   cardMetaRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
     marginBottom: 8,
   },
   cardDate: {
@@ -538,6 +657,59 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6366f1',
     textDecorationLine: 'underline',
+    fontWeight: '600',
+  },
+  planCard: {
+    backgroundColor: '#ffffff',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 12,
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)',
+    elevation: 2,
+  },
+  planCardDisabled: {
+    opacity: 0.6,
+  },
+  planHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  planTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#0f172a',
+  },
+  planMeta: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  planVariantRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  planVariantBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 6,
+  },
+  planVariantLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6366f1',
+  },
+  planVariantText: {
+    fontSize: 11,
+    color: '#475569',
     fontWeight: '600',
   },
 });
