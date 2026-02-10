@@ -673,9 +673,6 @@ const loadKakaoMapsScript = (): Promise<void> => {
   });
 };
 
-// 저장된 일정 키
-const SAVED_PLANS_KEY = 'SAVED_TRIP_PLANS';
-
 export default function ResultsScreen() {
   const router = useRouter();
   const { lastGeneratedPlan, setLastGeneratedPlan } = usePlaces();
@@ -684,6 +681,7 @@ export default function ResultsScreen() {
   const [hoveredItem, setHoveredItem] = useState<number | null>(null);
   const [expandedTransit, setExpandedTransit] = useState<number | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
+  const [savedPlanId, setSavedPlanId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -709,7 +707,7 @@ export default function ResultsScreen() {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8,
+        distance: 5,
       },
     }),
     useSensor(KeyboardSensor, {
@@ -1034,17 +1032,30 @@ export default function ResultsScreen() {
     const checkSavedStatus = async () => {
       if (!planData?.plan_id || !user) {
         setIsSaved(false);
+        setSavedPlanId(null);
         return;
       }
       try {
         const response = await planService.getSavedPlans(100);
-        // 저장된 플랜 목록에는 plan_id가 없으므로, 저장 시점에만 상태 업데이트
-        // 정확한 확인을 위해서는 각 저장된 플랜의 상세를 조회해야 하지만, 
-        // 성능상 저장 시점에만 상태를 업데이트하는 방식 사용
+        // 각 저장된 플랜의 plan_id를 비교하여 현재 플랜이 저장되었는지 확인
+        for (const item of response.items) {
+          try {
+            const detail = await planService.getSavedPlanDetail(item.saved_plan_id);
+            if (detail.plan_id === planData.plan_id) {
+              setIsSaved(true);
+              setSavedPlanId(item.saved_plan_id);
+              return;
+            }
+          } catch {
+            // 상세 조회 실패 시 건너뛰기
+          }
+        }
         setIsSaved(false);
+        setSavedPlanId(null);
       } catch (error) {
         console.error('저장 상태 확인 실패:', error);
         setIsSaved(false);
+        setSavedPlanId(null);
       }
     };
     checkSavedStatus();
@@ -1061,36 +1072,49 @@ export default function ResultsScreen() {
 
     setIsSaving(true);
     try {
-      // 플랜 제목 생성 (지역 + 날짜)
-      const title = `${planData.summary.region} ${planData.summary.start_date} ~ ${planData.summary.end_date}`;
-
-      await planService.savePlan({
-        plan_id: planData.plan_id,
-        title: title,
-      });
-
-      setIsSaved(true);
-      Toast.show({ 
-        type: 'success', 
-        text1: '저장 완료', 
-        text2: '일정이 저장되었습니다.', 
-        position: 'top', 
-        visibilityTime: 2000 
-      });
+      if (isSaved && savedPlanId) {
+        // 이미 저장된 상태 → 삭제
+        await planService.deleteSavedPlan(savedPlanId);
+        setIsSaved(false);
+        setSavedPlanId(null);
+        Toast.show({
+          type: 'success',
+          text1: '저장 해제',
+          text2: '저장된 일정이 삭제되었습니다.',
+          position: 'top',
+          visibilityTime: 2000
+        });
+      } else {
+        // 저장되지 않은 상태 → 저장
+        const title = `${planData.summary.region} ${planData.summary.start_date} ~ ${planData.summary.end_date}`;
+        const result = await planService.savePlan({
+          plan_id: planData.plan_id,
+          title: title,
+        });
+        setIsSaved(true);
+        setSavedPlanId(result.saved_plan_id);
+        Toast.show({
+          type: 'success',
+          text1: '저장 완료',
+          text2: '일정이 저장되었습니다.',
+          position: 'top',
+          visibilityTime: 2000
+        });
+      }
     } catch (error) {
-      console.error('저장 실패:', error);
-      const errorMessage = error instanceof Error ? error.message : '저장에 실패했습니다.';
-      Toast.show({ 
-        type: 'error', 
-        text1: '오류', 
-        text2: errorMessage, 
-        position: 'top', 
-        visibilityTime: 3000 
+      console.error('저장/삭제 실패:', error);
+      const errorMessage = error instanceof Error ? error.message : '처리에 실패했습니다.';
+      Toast.show({
+        type: 'error',
+        text1: '오류',
+        text2: errorMessage,
+        position: 'top',
+        visibilityTime: 3000
       });
     } finally {
       setIsSaving(false);
     }
-  }, [planData, user, isSaving]);
+  }, [planData, user, isSaving, isSaved, savedPlanId]);
 
   // 공유 기능
   const handleShare = useCallback(async () => {
@@ -1300,12 +1324,12 @@ export default function ResultsScreen() {
           <Pressable style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="chevron-back" size={24} color="#0f172a" />
           </Pressable>
-          <Pressable style={styles.headerInfo} onPress={() => router.push('/')}>
+          <View style={styles.headerInfo}>
             <Text style={styles.headerTitle}>{planData.summary.region} 코스 추천</Text>
             <Text style={styles.headerSubtitle}>
               {planData.summary.start_date} ~ {planData.summary.end_date} · {dayKeys.length}일
             </Text>
-          </Pressable>
+          </View>
           <View style={styles.headerActions}>
             {!isEditMode && (
               <>
@@ -1415,16 +1439,16 @@ export default function ResultsScreen() {
           </View>
 
           {/* 타임라인 */}
-          <ScrollView style={styles.timelineScroll} showsVerticalScrollIndicator={false}>
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={timeline.map((_, idx) => `place-${idx}`)}
+              strategy={verticalListSortingStrategy}
             >
-              <SortableContext
-                items={timeline.map((_, idx) => `place-${idx}`)}
-                strategy={verticalListSortingStrategy}
-              >
+              <ScrollView style={styles.timelineScroll} showsVerticalScrollIndicator={false}>
                 <View style={styles.timelineContainer}>
                   {timeline.map((item, idx) => {
                     const travelInfo = (idx > 0 || (item.transit_to_here?.length > 0 && item.category !== '고정일정')) ? extractTravelInfo(item.transit_to_here) : null;
@@ -1615,23 +1639,23 @@ export default function ResultsScreen() {
                     );
                   })}
                 </View>
-              </SortableContext>
-            </DndContext>
 
-            {/* 여행 요약 */}
-            <View style={styles.tripSummary}>
-              <View style={styles.summaryCard}>
-                <Ionicons name="information-circle" size={20} color="#6366f1" />
-                <View style={styles.summaryContent}>
-                  <Text style={styles.summaryTitle}>여행 정보</Text>
-                  <Text style={styles.summaryText}>
-                    {planData.summary.transport_mode === 'walkAndPublic' ? '도보 + 대중교통' : '자가용'} 이용 ·
-                    총 {timeline.length}개 장소 방문
-                  </Text>
+                {/* 여행 요약 */}
+                <View style={styles.tripSummary}>
+                  <View style={styles.summaryCard}>
+                    <Ionicons name="information-circle" size={20} color="#6366f1" />
+                    <View style={styles.summaryContent}>
+                      <Text style={styles.summaryTitle}>여행 정보</Text>
+                      <Text style={styles.summaryText}>
+                        {planData.summary.transport_mode === 'walkAndPublic' ? '도보 + 대중교통' : '자가용'} 이용 ·
+                        총 {timeline.length}개 장소 방문
+                      </Text>
+                    </View>
+                  </View>
                 </View>
-              </View>
-            </View>
-          </ScrollView>
+              </ScrollView>
+            </SortableContext>
+          </DndContext>
         </View>
 
         {/* 오른쪽: 지도 */}

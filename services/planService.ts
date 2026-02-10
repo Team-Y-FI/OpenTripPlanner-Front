@@ -217,6 +217,16 @@ export const planService = {
   },
 
   /**
+   * 저장된 플랜 삭제
+   * DELETE /otp/records/plans/{saved_plan_id}
+   */
+  deleteSavedPlan: async (savedPlanId: string): Promise<void> => {
+    await api.delete(`/records/plans/${savedPlanId}`, {
+      requiresAuth: true,
+    });
+  },
+
+  /**
    * 대체 장소 추천
    * POST /otp/plans/replace-spots
    */
