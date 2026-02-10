@@ -120,7 +120,6 @@ export default function RecordScreen() {
           </LinearGradient>
           <Text style={styles.headerTitle}>OpenTripPlanner</Text>
         </Pressable>
-        <View style={{ width: 40 }} />
       </View>
 
       {isLoading ? (
@@ -255,7 +254,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     backgroundColor: '#ffffff',
     paddingHorizontal: 20,
     paddingVertical: 16,
