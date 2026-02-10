@@ -41,6 +41,7 @@ interface RouteItem {
   category2?: string;
   lat: number;
   lng: number;
+  addr: string;
 }
 
 interface DayPlan {
@@ -715,17 +716,17 @@ export default function ResultsScreen() {
       // 일반 장소: name으로 검색
       const routeItem = currentDayData.route.find((r) => r.name === item.name);
       if (routeItem) {
-        locations.push({ lat: routeItem.lat, lng: routeItem.lng, name: item.name, category: item.category });
+        locations.push({ lat: routeItem.lat, lng: routeItem.lng, name: item.name, category: item.category, address: routeItem.addr || '' });
         return;
       }
       const restaurantItem = currentDayData.restaurants.find((r) => r.name === item.name);
       if (restaurantItem) {
-        locations.push({ lat: restaurantItem.lat, lng: restaurantItem.lng, name: item.name, category: item.category });
+        locations.push({ lat: restaurantItem.lat, lng: restaurantItem.lng, name: item.name, category: item.category, address: restaurantItem.addr || '' });
         return;
       }
       const accommodationItem = currentDayData.accommodations.find((a) => a.name === item.name);
       if (accommodationItem) {
-        locations.push({ lat: accommodationItem.lat, lng: accommodationItem.lng, name: item.name, category: item.category });
+        locations.push({ lat: accommodationItem.lat, lng: accommodationItem.lng, name: item.name, category: item.category, address: accommodationItem.addr || '' });
         return;
       }
       // 고정 일정: route에서 start_time/end_time이 있는 고정일정 항목을 찾음
@@ -1068,6 +1069,7 @@ export default function ResultsScreen() {
                   key={index}
                   coordinate={{ latitude: location.lat, longitude: location.lng }}
                   title={location.name}
+                  description={location.address || undefined}
                 >
                   <View style={[styles.mapMarker, { backgroundColor: orderColor }]}>
                     <Text style={styles.mapMarkerText}>{getOrderMarker(index)}</Text>
@@ -1366,21 +1368,8 @@ export default function ResultsScreen() {
                       {/* 장소명 */}
                       <Text style={[styles.placeName, isEditMode && styles.placeNameEdit]}>{item.name}</Text>
 
-                      {/* 고정일정인 경우: 위치 태그와 고정일정 태그를 별도로 표시 */}
-                      {item.category === '고정일정' ? (
-                        <View style={styles.fixedEventTagsContainer}>
-                          {/* 위치 태그 */}
-                          {allLocations[idx]?.address && (
-                            <View style={styles.fixedEventLocationTag}>
-                              <Ionicons name="location" size={12} color="#64748b" />
-                              <Text style={styles.fixedEventLocationTagText} numberOfLines={1}>
-                                {allLocations[idx].address}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                      ) : (
-                        /* 일반 카테고리 배지 */
+                      {/* 카테고리 배지 (고정일정이 아닌 경우만 표시) */}
+                      {item.category !== '고정일정' && (
                         <View style={styles.placeMetaRow}>
                           <View style={[styles.categoryBadge, { backgroundColor: categoryColors.bg }]}>
                             <Ionicons name={categoryIcon as any} size={12} color={categoryColors.text} />
@@ -1388,6 +1377,13 @@ export default function ResultsScreen() {
                               {item.category}
                             </Text>
                           </View>
+                          {item.category2 ? (
+                            <View style={[styles.categoryBadge, { backgroundColor: '#f1f5f9' }]}>
+                              <Text style={[styles.categoryText, { color: '#475569' }]}>
+                                {item.category2}
+                              </Text>
+                            </View>
+                          ) : null}
                         </View>
                       )}
 
