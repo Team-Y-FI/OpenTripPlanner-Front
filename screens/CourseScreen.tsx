@@ -418,6 +418,8 @@ export default function CourseWeb() {
   };
 
   const confirmAddFixed = () => {
+    console.log("draftPlace: ", draftPlace);
+    
     const err =
       draftForm.startTime && draftForm.endTime
         ? isTimeEndAfterStart(draftForm.startTime, draftForm.endTime)
