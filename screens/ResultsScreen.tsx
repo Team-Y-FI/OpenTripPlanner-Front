@@ -885,24 +885,7 @@ export default function ResultsScreen() {
     }
   }, [lastGeneratedPlan]);
 
-  // 편집 모드 종료 (저장)
-  const saveAndExitEditMode = useCallback(() => {
-    if (editedPlan) {
-      setLastGeneratedPlan(editedPlan);
-      Toast.show({
-        type: "success",
-        text1: "저장 완료",
-        text2: "일정이 수정되었습니다.",
-        position: "top",
-        visibilityTime: 2000,
-      });
-    }
-    setIsEditMode(false);
-    setEditedPlan(null);
-    setOriginalPlan(null);
-  }, [editedPlan, setLastGeneratedPlan]);
-
-  // 편집 취소
+  // 편집 취소 (에러 해결용: 반드시 정의되어야 함)
   const cancelEditMode = useCallback(() => {
     setIsEditMode(false);
     setEditedPlan(null);
@@ -912,39 +895,38 @@ export default function ResultsScreen() {
     setAlternatives([]);
   }, []);
 
-  // 원본으로 초기화
+  // 원본 일정으로 초기화하는 함수
   const resetToOriginal = useCallback(() => {
     if (originalPlan) {
+      // 1. editedPlan을 처음에 복사해둔 originalPlan으로 덮어씀
       setEditedPlan(deepClone(originalPlan));
+
+      // 2. 사용자에게 알림 표시
       Toast.show({
         type: "info",
-        text1: "초기화",
-        text2: "원본 일정으로 되돌렸습니다.",
+        text1: "초기화 완료",
+        text2: "편집 전 원본 일정으로 되돌렸습니다.",
         position: "top",
         visibilityTime: 2000,
       });
     }
   }, [originalPlan]);
 
-  // 장소 삭제 및 실제 경로 재계산 (백엔드 연동)
-  const deletePlace = useCallback(
-    async (dayKey: string, placeIndex: number) => {
-      if (!editedPlan) return;
+  // 완료 버튼 클릭 시 - 서버 일괄 재계산 및 DB 저장
+  const saveAndExitEditMode = useCallback(async () => {
+    if (!editedPlan) return;
 
-      // 1. 현재 일차의 데이터 추출
-      const dayPlan = editedPlan.variants[dayKey];
+    setIsRecalculating(true); // 로딩 시작 (스피너 작동)
+
+    try {
+      const dayPlan = editedPlan.variants[activeDay];
       const timeline = dayPlan.timelines.fastest_version;
-      const placeToDelete = timeline[placeIndex];
 
-      // 2. 삭제할 장소를 제외한 나머지 타임라인 항목들
-      const remainingTimeline = timeline.filter((_, i) => i !== placeIndex);
-
-      // 3. 백엔드 PlaceNode 규격에 맞춰 데이터 매핑 (가장 중요)
-      // route 배열이나 timeline 데이터에서 엔진에 필요한 필드(type, stay, window)를 복원합니다.
-      const remainingPlaces: PlaceNode[] = remainingTimeline.map((item) => {
-        // route 데이터에서 상세 정보(좌표, 주소, 엔진용 필드)를 찾습니다.
-        const origin = dayPlan.route.find((r) => r.name === item.name);
-
+      // 서버로 보낼 장소 노드 데이터 조립
+      const remainingPlaces: PlaceNode[] = timeline.map((item) => {
+        const origin = dayPlan.route.find(
+          (r) => r.name === item.name || (r as any).title === item.name,
+        );
         return {
           name: item.name,
           category: item.category,
@@ -952,110 +934,102 @@ export default function ResultsScreen() {
           lat: origin?.lat || 0,
           lng: origin?.lng || 0,
           addr: origin?.addr || "",
-          // 엔진이 장소의 성격을 파악하기 위한 핵심 데이터
-          type: (origin as any)?.type || "spot",
+          // origin을 못 찾더라도 category가 '고정일정'이면 타입을 유지해줌
+          type:
+            (origin as any)?.type ||
+            (item.category === "고정일정" ? "fixed" : "spot"),
           stay: (origin as any)?.stay || 60,
           window: (origin as any)?.window || null,
-          orig_time_str: (origin as any)?.orig_time_str || null, // 엔진 타임라인 복원용 추가
+          orig_time_str: (origin as any)?.orig_time_str || null,
         };
       });
 
-      setIsRecalculating(true); // 로딩 상태 시작
+      // 백엔드 재계산 API 호출 (백엔드에서 DB 저장까지 수행)
+      const response = await planService.recalculateRoute(editedPlan.plan_id, {
+        day_key: activeDay,
+        remaining_places: remainingPlaces,
+      });
 
-      try {
-        // 4. 백엔드 recalculate API 호출
-        const response = await planService.recalculateRoute(
-          editedPlan.plan_id,
-          {
-            day_key: dayKey,
-            remaining_places: remainingPlaces,
-          },
-        );
+      // 서버 응답 결과로 최종 상태 업데이트
+      const finalPlan = deepClone(editedPlan);
+      finalPlan.variants[activeDay].route = response.route;
+      finalPlan.variants[activeDay].timelines = response.timelines;
 
-        // 5. 서버에서 받은 최적화된 동선으로 상태 업데이트
-        const updatedPlan = deepClone(editedPlan);
+      setLastGeneratedPlan(finalPlan); // 전역 상태 갱신
+      setIsEditMode(false);
+      setEditedPlan(null);
+      setOriginalPlan(null);
 
-        // 서버 응답 구조: { route: [...], timelines: { fastest_version: [...], ... } }
-        updatedPlan.variants[dayKey].route = response.route;
-        updatedPlan.variants[dayKey].timelines = response.timelines;
+      Toast.show({
+        type: "success",
+        text1: "동선 최적화 완료!",
+        text2: "변경된 일정이 서버에 저장되었습니다.",
+      });
+    } catch (error) {
+      console.error("재계산 실패:", error);
+      Toast.show({ type: "error", text1: "저장 실패" });
+    } finally {
+      setIsRecalculating(false); // 로딩 종료
+    }
+  }, [editedPlan, activeDay, setLastGeneratedPlan]);
 
-        setEditedPlan(updatedPlan);
+  // 장소 삭제 (화면에서만 즉시 삭제)
+  const deletePlace = useCallback(
+    (dayKey: string, placeIndex: number) => {
+      if (!editedPlan) return;
+      const updatedPlan = deepClone(editedPlan);
+      const dayPlan = updatedPlan.variants[dayKey];
+      const timeline = dayPlan.timelines.fastest_version;
+      const placeToDelete = timeline[placeIndex];
 
-        Toast.show({
-          type: "success",
-          text1: "동선 재계산 완료",
-          text2: `${placeToDelete.name} 삭제 후 최적 경로를 찾았습니다.`,
-        });
-      } catch (error) {
-        console.error("재계산 실패:", error);
-        Toast.show({
-          type: "error",
-          text1: "재계산 실패",
-          text2: "동선을 다시 계산하는 중 오류가 발생했습니다.",
-        });
-      } finally {
-        setIsRecalculating(false); // 로딩 상태 종료
-      }
+      dayPlan.timelines.fastest_version = timeline.filter(
+        (_, i) => i !== placeIndex,
+      );
+      dayPlan.route = dayPlan.route.filter(
+        (r) =>
+          r.name !== placeToDelete.name &&
+          (r as any).title !== placeToDelete.name,
+      );
+
+      dayPlan.timelines.fastest_version = recalculateTimes(
+        dayPlan.timelines.fastest_version,
+      );
+      setEditedPlan(updatedPlan);
+
+      Toast.show({
+        type: "info",
+        text1: "목록에서 제거됨",
+        text2: "[완료]를 누르면 동선이 최적화됩니다.",
+      });
     },
     [editedPlan],
   );
 
-  // 드래그 앤 드롭 완료 핸들러
+  // 드래그 앤 드롭 완료 (화면 순서만 즉시 변경)
   const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
+    (event: DragEndEvent) => {
       const { active, over } = event;
       if (!over || active.id === over.id || !editedPlan) return;
 
       const oldIndex = parseInt(String(active.id).split("-")[1]);
       const newIndex = parseInt(String(over.id).split("-")[1]);
 
-      const dayPlan = editedPlan.variants[activeDay];
-      // 1. 일단 화면에서 순서만 바꿈
+      const updatedPlan = deepClone(editedPlan);
+      const dayPlan = updatedPlan.variants[activeDay];
+
       const newTimeline = arrayMove(
         dayPlan.timelines.fastest_version,
         oldIndex,
         newIndex,
       );
+      dayPlan.timelines.fastest_version = recalculateTimes(newTimeline);
 
-      // 2. 백엔드 전송용 데이터 준비 (deletePlace와 동일한 매핑 로직)
-      const remainingPlaces: PlaceNode[] = newTimeline.map((item) => {
-        const origin = dayPlan.route.find((r) => r.name === item.name);
-        return {
-          name: item.name,
-          category: item.category,
-          category2: item.category2 || "",
-          lat: origin?.lat || 0,
-          lng: origin?.lng || 0,
-          addr: origin?.addr || "",
-          type: (origin as any)?.type || "spot",
-          stay: (origin as any)?.stay || 60,
-          window: (origin as any)?.window || null,
-        };
-      });
+      const routeOrder = dayPlan.timelines.fastest_version.map((t) => t.name);
+      dayPlan.route.sort(
+        (a, b) => routeOrder.indexOf(a.name) - routeOrder.indexOf(b.name),
+      );
 
-      setIsRecalculating(true);
-      try {
-        // 3. 백엔드 엔진에 바뀐 순서로 재계산 요청
-        const response = await planService.recalculateRoute(
-          editedPlan.plan_id,
-          {
-            day_key: activeDay,
-            remaining_places: remainingPlaces,
-          },
-        );
-
-        // 4. 결과 업데이트
-        const updatedPlan = deepClone(editedPlan);
-        updatedPlan.variants[activeDay].route = response.route;
-        updatedPlan.variants[activeDay].timelines = response.timelines;
-        setEditedPlan(updatedPlan);
-
-        Toast.show({ type: "success", text1: "순서 변경 및 동선 재계산 완료" });
-      } catch (error) {
-        Toast.show({ type: "error", text1: "동선 재계산 실패" });
-      } finally {
-        setIsRecalculating(false);
-      }
+      setEditedPlan(updatedPlan);
     },
     [editedPlan, activeDay],
   );

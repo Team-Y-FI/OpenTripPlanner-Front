@@ -169,6 +169,7 @@ export interface PlaceNode {
   type: string; // 추가
   stay: number; // 추가
   window?: number[] | null; // 추가
+  orig_time_str?: string | null;
 }
 
 export interface RecalculateRouteRequest {
