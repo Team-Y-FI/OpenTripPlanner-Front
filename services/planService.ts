@@ -158,6 +158,34 @@ export interface ReplaceSpotsResponse {
   alternatives: AlternativeSpot[];
 }
 
+// 경로 재계산 요청용 장소 노드 타입
+export interface PlaceNode {
+  name: string;
+  category: string;
+  category2?: string;
+  lat: number;
+  lng: number;
+  addr?: string;
+  type: string; // 추가
+  stay: number; // 추가
+  window?: number[] | null; // 추가
+}
+
+export interface RecalculateRouteRequest {
+  day_key: string;
+  remaining_places: PlaceNode[];
+}
+
+export interface RecalculateRouteResponse {
+  plan_id: string;
+  updated_day: string;
+  route: Place[];
+  timelines: {
+    fastest_version: TimelineItem[];
+    min_transfer_version: TimelineItem[];
+  };
+}
+
 /**
  * 코스/플랜 관련 API 서비스
  */
@@ -236,6 +264,22 @@ export const planService = {
     return api.post<ReplaceSpotsResponse>("/plans/replace-spots", data, {
       requiresAuth: true,
     });
+  },
+  /**
+   * 코스 재계산 (장소 삭제/수정 후)
+   * POST /otp/plans/{plan_id}/recalculate
+   */
+  recalculateRoute: async (
+    planId: string,
+    data: RecalculateRouteRequest,
+  ): Promise<RecalculateRouteResponse> => {
+    return api.post<RecalculateRouteResponse>(
+      `/plans/${planId}/recalculate`,
+      data,
+      {
+        requiresAuth: true,
+      },
+    );
   },
 };
 
