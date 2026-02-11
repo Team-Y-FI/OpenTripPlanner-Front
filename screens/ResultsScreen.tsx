@@ -1,31 +1,42 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { usePlaces } from '@/contexts/PlacesContext';
-import { useAuth } from '@/contexts/AuthContext';
-import { useRouter } from 'expo-router';
-import Toast from 'react-native-toast-message';
-import { planService, type AlternativeSpot } from '@/services/planService';
+import { useAuth } from "@/contexts/AuthContext";
+import { usePlaces } from "@/contexts/PlacesContext";
 import {
-  DndContext,
+  planService,
+  type AlternativeSpot,
+  type PlaceNode,
+} from "@/services/planService";
+import {
   closestCenter,
+  DndContext,
+  DragEndEvent,
   KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
-  DragEndEvent,
-} from '@dnd-kit/core';
+} from "@dnd-kit/core";
 import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Toast from "react-native-toast-message";
 
-const KAKAO_API_KEY = process.env.EXPO_PUBLIC_KAKAO_MAPS_KEY || '';
+const KAKAO_API_KEY = process.env.EXPO_PUBLIC_KAKAO_MAPS_KEY || "";
 
 // 카카오 맵 타입 선언
 declare global {
@@ -52,6 +63,11 @@ interface RouteItem {
   lat: number;
   lng: number;
   addr: string;
+  // ▼ 백엔드 재계산(엔진) 연동을 위해 추가되는 필수 메타데이터 ▼
+  type: string; // "spot", "lunch", "dinner", "fixed" 등 장소의 성격
+  stay: number; // 해당 장소에서의 체류 시간 (분 단위)
+  window?: number[] | null; // 방문 허용 시간대 (예: [660, 840])
+  orig_time_str?: string | null; // 고정 일정의 원래 시간 문자열 (예: "14:00 - 15:00")
 }
 
 interface DayPlan {
@@ -85,37 +101,50 @@ const getOrderMarker = (index: number): string => {
 
 // 카테고리별 아이콘 매핑
 const getCategoryIcon = (category: string): string => {
-  const cat = (category || '').toLowerCase();
-  if (cat.includes('카페') || cat.includes('커피')) return 'cafe';
-  if (cat.includes('음식') || cat.includes('맛집') || cat.includes('식당')) return 'restaurant';
-  if (cat.includes('쇼핑')) return 'bag';
-  if (cat.includes('관광') || cat.includes('명소')) return 'camera';
-  if (cat.includes('공원') || cat.includes('산책')) return 'leaf';
-  if (cat.includes('전시') || cat.includes('미술관') || cat.includes('박물관')) return 'images';
-  if (cat.includes('문화')) return 'library';
-  if (cat.includes('레포츠') || cat.includes('스포츠')) return 'fitness';
-  if (cat.includes('숙박')) return 'bed';
-  return 'location';
+  const cat = (category || "").toLowerCase();
+  if (cat.includes("카페") || cat.includes("커피")) return "cafe";
+  if (cat.includes("음식") || cat.includes("맛집") || cat.includes("식당"))
+    return "restaurant";
+  if (cat.includes("쇼핑")) return "bag";
+  if (cat.includes("관광") || cat.includes("명소")) return "camera";
+  if (cat.includes("공원") || cat.includes("산책")) return "leaf";
+  if (cat.includes("전시") || cat.includes("미술관") || cat.includes("박물관"))
+    return "images";
+  if (cat.includes("문화")) return "library";
+  if (cat.includes("레포츠") || cat.includes("스포츠")) return "fitness";
+  if (cat.includes("숙박")) return "bed";
+  return "location";
 };
 
 // 카테고리별 색상
-const getCategoryColor = (category: string): { bg: string; text: string; accent: string } => {
-  const cat = (category || '').toLowerCase();
-  if (cat.includes('카페') || cat.includes('커피')) return { bg: '#fef3c7', text: '#92400e', accent: '#f59e0b' };
-  if (cat.includes('음식') || cat.includes('맛집') || cat.includes('식당')) return { bg: '#fee2e2', text: '#991b1b', accent: '#ef4444' };
-  if (cat.includes('쇼핑')) return { bg: '#fce7f3', text: '#9d174d', accent: '#ec4899' };
-  if (cat.includes('관광') || cat.includes('명소')) return { bg: '#dbeafe', text: '#1e40af', accent: '#3b82f6' };
-  if (cat.includes('공원') || cat.includes('산책')) return { bg: '#dcfce7', text: '#166534', accent: '#22c55e' };
-  if (cat.includes('전시') || cat.includes('미술관') || cat.includes('박물관')) return { bg: '#f3e8ff', text: '#6b21a8', accent: '#a855f7' };
-  if (cat.includes('숙박')) return { bg: '#e0e7ff', text: '#3730a3', accent: '#6366f1' };
-  return { bg: '#f1f5f9', text: '#475569', accent: '#64748b' };
+const getCategoryColor = (
+  category: string,
+): { bg: string; text: string; accent: string } => {
+  const cat = (category || "").toLowerCase();
+  if (cat.includes("카페") || cat.includes("커피"))
+    return { bg: "#fef3c7", text: "#92400e", accent: "#f59e0b" };
+  if (cat.includes("음식") || cat.includes("맛집") || cat.includes("식당"))
+    return { bg: "#fee2e2", text: "#991b1b", accent: "#ef4444" };
+  if (cat.includes("쇼핑"))
+    return { bg: "#fce7f3", text: "#9d174d", accent: "#ec4899" };
+  if (cat.includes("관광") || cat.includes("명소"))
+    return { bg: "#dbeafe", text: "#1e40af", accent: "#3b82f6" };
+  if (cat.includes("공원") || cat.includes("산책"))
+    return { bg: "#dcfce7", text: "#166534", accent: "#22c55e" };
+  if (cat.includes("전시") || cat.includes("미술관") || cat.includes("박물관"))
+    return { bg: "#f3e8ff", text: "#6b21a8", accent: "#a855f7" };
+  if (cat.includes("숙박"))
+    return { bg: "#e0e7ff", text: "#3730a3", accent: "#6366f1" };
+  return { bg: "#f1f5f9", text: "#475569", accent: "#64748b" };
 };
 
 // 거리 및 이동 시간 추출 (요약용)
-const extractTravelInfo = (transit: string[]): { distance: string | null; duration: string | null; mode: string } => {
+const extractTravelInfo = (
+  transit: string[],
+): { distance: string | null; duration: string | null; mode: string } => {
   let distance: string | null = null;
   let duration: string | null = null;
-  let mode = 'walk';
+  let mode = "walk";
 
   let totalMinutes = 0;
 
@@ -124,14 +153,14 @@ const extractTravelInfo = (transit: string[]): { distance: string | null; durati
     const leisureMatch = t.match(/여유\s*[:\s]*(\d+)\s*분/);
     if (leisureMatch) {
       totalMinutes += parseInt(leisureMatch[1]);
-      mode = 'wait';
+      mode = "wait";
       continue;
     }
     // 대기 시간 처리 (가장 먼저 체크)
     const waitMatch = t.match(/대기\s*[:\s]*(\d+)\s*분/);
     if (waitMatch) {
       totalMinutes += parseInt(waitMatch[1]);
-      mode = 'wait';
+      mode = "wait";
       continue;
     }
     // 도보 시간 추출
@@ -141,14 +170,14 @@ const extractTravelInfo = (transit: string[]): { distance: string | null; durati
       totalMinutes += minutes;
       const km = (minutes / 60) * 4;
       distance = km >= 1 ? `${km.toFixed(1)}km` : `${(km * 1000).toFixed(0)}m`;
-      mode = 'walk';
+      mode = "walk";
       continue;
     }
     // 승용차 이동 처리
     const carMatch = t.match(/승용차\s*이동\s*[:\s]*(\d+)\s*분/);
     if (carMatch) {
       totalMinutes += parseInt(carMatch[1]);
-      mode = 'car';
+      mode = "car";
       continue;
     }
     // 버스/지하철 시간
@@ -158,7 +187,7 @@ const extractTravelInfo = (transit: string[]): { distance: string | null; durati
       if (transitMinutesMatch) {
         totalMinutes += parseInt(transitMinutesMatch[1]);
       }
-      mode = 'transit';
+      mode = "transit";
       continue;
     }
   }
@@ -170,41 +199,54 @@ const extractTravelInfo = (transit: string[]): { distance: string | null; durati
 };
 
 // 시간 문자열에서 기본 구간과 혼잡 태그 분리
-const splitTimeAndExtra = (timeStr: string): {
+const splitTimeAndExtra = (
+  timeStr: string,
+): {
   startTime: string;
   endTime: string | null;
   extraLabel: string | null;
   extraColor: string | null;
 } => {
   // 빈 문자열이나 undefined 처리
-  if (!timeStr || timeStr.trim() === '') {
-    return { startTime: '', endTime: null, extraLabel: null, extraColor: null };
+  if (!timeStr || timeStr.trim() === "") {
+    return { startTime: "", endTime: null, extraLabel: null, extraColor: null };
   }
 
   const extraMatch = timeStr.match(/\[(.+)\]\s*$/);
-  const base = timeStr.replace(/\s*\[.+\]\s*$/, '').trim();
-  const [start, end] = base.split(' - ').map(s => s?.trim());
+  const base = timeStr.replace(/\s*\[.+\]\s*$/, "").trim();
+  const [start, end] = base.split(" - ").map((s) => s?.trim());
   const extraRaw = extraMatch ? extraMatch[1] : null;
 
   if (!extraRaw) {
-    return { startTime: start ?? '', endTime: end ?? null, extraLabel: null, extraColor: null };
+    return {
+      startTime: start ?? "",
+      endTime: end ?? null,
+      extraLabel: null,
+      extraColor: null,
+    };
   }
 
-  const cleaned = extraRaw.replace(/[🟢🟡🔴]/g, '').trim();
-  let color = '#e5e7eb';
-  if (extraRaw.includes('🟡') || cleaned.includes('보통')) color = '#eab308';
-  else if (extraRaw.includes('🔴') || cleaned.includes('정체') || cleaned.includes('지연')) color = '#dc2626';
-  else if (extraRaw.includes('🟢') || cleaned.includes('여유')) color = '#16a34a';
+  const cleaned = extraRaw.replace(/[🟢🟡🔴]/g, "").trim();
+  let color = "#e5e7eb";
+  if (extraRaw.includes("🟡") || cleaned.includes("보통")) color = "#eab308";
+  else if (
+    extraRaw.includes("🔴") ||
+    cleaned.includes("정체") ||
+    cleaned.includes("지연")
+  )
+    color = "#dc2626";
+  else if (extraRaw.includes("🟢") || cleaned.includes("여유"))
+    color = "#16a34a";
 
   return {
-    startTime: start ?? '',
+    startTime: start ?? "",
     endTime: end ?? null,
     extraLabel: cleaned,
     extraColor: color,
   };
 };
 
-type TransitStepType = 'walk' | 'bus' | 'subway' | 'wait' | 'car' | 'other';
+type TransitStepType = "walk" | "bus" | "subway" | "wait" | "car" | "other";
 
 interface ParsedTransitStep {
   type: TransitStepType;
@@ -222,15 +264,17 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
   const delayMatch = raw.match(/\[([^\]]*(?:지연|정체|서행)[^\]]*)\]\s*$/);
   // 주차/도보 정보 추출 [주차/도보 +12분]
   const parkingMatch = raw.match(/\[주차\/도보\s*\+(\d+)\s*분\]/);
-  
-  let cleanRaw = raw.replace(/\s*\[[^\]]*(?:지연|정체|서행)[^\]]*\]\s*$/, '').trim();
+
+  let cleanRaw = raw
+    .replace(/\s*\[[^\]]*(?:지연|정체|서행)[^\]]*\]\s*$/, "")
+    .trim();
   // 주차/도보 정보도 제거
-  cleanRaw = cleanRaw.replace(/\s*\[주차\/도보\s*\+\d+\s*분\]/g, '').trim();
-  
+  cleanRaw = cleanRaw.replace(/\s*\[주차\/도보\s*\+\d+\s*분\]/g, "").trim();
+
   const delayRaw = delayMatch ? delayMatch[1] : null;
   const parkingRaw = parkingMatch ? `주차/도보 +${parkingMatch[1]}분` : null;
 
-  let type: TransitStepType = 'other';
+  let type: TransitStepType = "other";
   let duration: string | null = null;
   let routes: string[] = [];
   let fromStation: string | null = null;
@@ -239,41 +283,53 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
   // 출발 전 여유: "출발 전 여유 : 120분"
   const leisureMatch = cleanRaw.match(/여유\s*[:\s]*(\d+)\s*분/);
   if (leisureMatch) {
-    type = 'wait';
+    type = "wait";
     duration = `${leisureMatch[1]}분`;
   }
   // 대기: "대기 : 3분" 또는 "대기 3분" 또는 "현장 대기 : 10분" (가장 먼저 체크)
   else if (cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/)) {
     const waitMatch = cleanRaw.match(/대기\s*[:\s]*(\d+)\s*분/);
-    type = 'wait';
+    type = "wait";
     duration = waitMatch ? `${waitMatch[1]}분` : null;
   }
   // 도보: "도보 : 2분" 또는 "도보 2분"
   else if (cleanRaw.match(/도보\s*[:\s]*(\d+)\s*분/)) {
     const walkMatch = cleanRaw.match(/도보\s*[:\s]*(\d+)\s*분/);
     if (walkMatch) {
-      type = 'walk';
+      type = "walk";
       duration = `${walkMatch[1]}분`;
     }
   }
   // 승용차 이동: "승용차 이동 : 18분"
-  else if (cleanRaw.includes('승용차')) {
-    type = 'car';
+  else if (cleanRaw.includes("승용차")) {
+    type = "car";
     const carMatch = cleanRaw.match(/승용차\s*이동\s*[:\s]*(\d+)\s*분/);
     if (carMatch) duration = `${carMatch[1]}분`;
   }
   // 버스: "[버스][341, 3411, N31] : 잠실역.롯데월드 → 잠실진주아파트 : 4분"
-  else if (cleanRaw.includes('버스') || (cleanRaw.match(/\d{2,4}번?/) && !cleanRaw.includes('대기') && !cleanRaw.includes('지하철') && !cleanRaw.includes('호선'))) {
-    type = 'bus';
+  else if (
+    cleanRaw.includes("버스") ||
+    (cleanRaw.match(/\d{2,4}번?/) &&
+      !cleanRaw.includes("대기") &&
+      !cleanRaw.includes("지하철") &&
+      !cleanRaw.includes("호선"))
+  ) {
+    type = "bus";
     // 두 번째 대괄호에서 노선 번호 추출: [버스][341, 3411, N31]
     const routeMatch = cleanRaw.match(/\[버스\]\[([^\]]+)\]/);
     if (routeMatch) {
-      routes = routeMatch[1].split(/,\s*/).map(r => r.trim()).filter(r => r);
+      routes = routeMatch[1]
+        .split(/,\s*/)
+        .map((r) => r.trim())
+        .filter((r) => r);
     } else {
       // fallback: 첫 번째 대괄호가 노선일 수도 있음
       const fallbackMatch = cleanRaw.match(/\[([^\]]+)\]/);
-      if (fallbackMatch && !fallbackMatch[1].includes('버스')) {
-        routes = fallbackMatch[1].split(/,\s*/).map(r => r.trim()).filter(r => r);
+      if (fallbackMatch && !fallbackMatch[1].includes("버스")) {
+        routes = fallbackMatch[1]
+          .split(/,\s*/)
+          .map((r) => r.trim())
+          .filter((r) => r);
       }
     }
     // 정류장 정보 추출: "출발지 → 도착지"
@@ -287,8 +343,8 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
     if (durationMatch) duration = `${durationMatch[1]}분`;
   }
   // 지하철: "[지하철][서울 2호선] : 성수 → 잠실나루 : 8분"
-  else if (cleanRaw.includes('지하철') || cleanRaw.includes('호선')) {
-    type = 'subway';
+  else if (cleanRaw.includes("지하철") || cleanRaw.includes("호선")) {
+    type = "subway";
     // 두 번째 대괄호에서 노선 정보 추출: [지하철][서울 2호선]
     const lineMatch = cleanRaw.match(/\[지하철\]\[([^\]]+)\]/);
     if (lineMatch) {
@@ -310,21 +366,23 @@ const parseTransitStep = (raw: string): ParsedTransitStep => {
   // 지연 정보 색상
   let delayColor: string | null = null;
   let delayText: string | null = null;
-  
+
   if (delayRaw) {
-    if (delayRaw.includes('🔴') || delayRaw.includes('정체')) delayColor = '#dc2626';
-    else if (delayRaw.includes('🟡') || delayRaw.includes('지연')) delayColor = '#f59e0b';
-    else if (delayRaw.includes('🟢')) delayColor = '#16a34a';
-    else delayColor = '#6b7280';
-    delayText = delayRaw.replace(/[🟢🟡🔴]/g, '').trim();
+    if (delayRaw.includes("🔴") || delayRaw.includes("정체"))
+      delayColor = "#dc2626";
+    else if (delayRaw.includes("🟡") || delayRaw.includes("지연"))
+      delayColor = "#f59e0b";
+    else if (delayRaw.includes("🟢")) delayColor = "#16a34a";
+    else delayColor = "#6b7280";
+    delayText = delayRaw.replace(/[🟢🟡🔴]/g, "").trim();
   }
-  
+
   // 주차/도보 정보가 있으면 지연 정보로 추가 (서행처럼 노란색으로 표시)
   if (parkingRaw) {
     delayText = delayText ? `${delayText} ${parkingRaw}` : parkingRaw;
     // 기존 지연 색상이 없거나 회색이면 노란색으로 설정
-    if (!delayColor || delayColor === '#6b7280') {
-      delayColor = '#eab308'; // 서행과 동일한 노란색
+    if (!delayColor || delayColor === "#6b7280") {
+      delayColor = "#eab308"; // 서행과 동일한 노란색
     }
   }
 
@@ -351,45 +409,62 @@ const calculateTotalTransitTime = (transitSteps: string[]): string => {
 };
 
 // 혼잡도 레벨 파싱
-const parsePopulationLevel = (level: string): { text: string; color: string; bgColor: string } => {
-  const cleaned = level.replace(/[🟢🟡🔴]/g, '').trim();
-  if (level.includes('🟢') || cleaned.includes('여유') || cleaned.includes('보통')) {
-    return { text: cleaned, color: '#166534', bgColor: '#dcfce7' };
+const parsePopulationLevel = (
+  level: string,
+): { text: string; color: string; bgColor: string } => {
+  const cleaned = level.replace(/[🟢🟡🔴]/g, "").trim();
+  if (
+    level.includes("🟢") ||
+    cleaned.includes("여유") ||
+    cleaned.includes("보통")
+  ) {
+    return { text: cleaned, color: "#166534", bgColor: "#dcfce7" };
   }
-  if (level.includes('🟡') || cleaned.includes('약간')) {
-    return { text: cleaned, color: '#a16207', bgColor: '#fef9c3' };
+  if (level.includes("🟡") || cleaned.includes("약간")) {
+    return { text: cleaned, color: "#a16207", bgColor: "#fef9c3" };
   }
-  if (level.includes('🔴') || cleaned.includes('붐빔') || cleaned.includes('혼잡')) {
-    return { text: cleaned, color: '#dc2626', bgColor: '#fee2e2' };
+  if (
+    level.includes("🔴") ||
+    cleaned.includes("붐빔") ||
+    cleaned.includes("혼잡")
+  ) {
+    return { text: cleaned, color: "#dc2626", bgColor: "#fee2e2" };
   }
-  return { text: cleaned, color: '#475569', bgColor: '#f1f5f9' };
+  return { text: cleaned, color: "#475569", bgColor: "#f1f5f9" };
 };
 
 // 코스 순서 아이콘 색상: 혼잡도에 맞춤 (보통=노랑, 혼잡=빨강, 그 외=회색)
 const getCourseOrderColor = (level?: string): string => {
-  if (!level || level === '-') return '#94a3b8';
-  const cleaned = level.replace(/[🟢🟡🔴]/g, '').trim();
-  if (cleaned.includes('보통')) return '#eab308';
-  if (cleaned.includes('혼잡') || cleaned.includes('붐빔') || level.includes('🔴')) return '#dc2626';
-  return '#94a3b8';
+  if (!level || level === "-") return "#94a3b8";
+  const cleaned = level.replace(/[🟢🟡🔴]/g, "").trim();
+  if (cleaned.includes("보통")) return "#eab308";
+  if (
+    cleaned.includes("혼잡") ||
+    cleaned.includes("붐빔") ||
+    level.includes("🔴")
+  )
+    return "#dc2626";
+  return "#94a3b8";
 };
 
 // 카테고리별 예상 체류 시간 (분)
 const getEstimatedDuration = (category: string): number => {
-  const cat = (category || '').toLowerCase();
-  if (cat.includes('카페') || cat.includes('커피')) return 30;
-  if (cat.includes('음식') || cat.includes('맛집') || cat.includes('식당')) return 60;
-  if (cat.includes('쇼핑')) return 45;
-  if (cat.includes('관광') || cat.includes('명소')) return 60;
-  if (cat.includes('공원') || cat.includes('산책')) return 45;
-  if (cat.includes('전시') || cat.includes('미술관') || cat.includes('박물관')) return 90;
-  if (cat.includes('숙박')) return 60;
+  const cat = (category || "").toLowerCase();
+  if (cat.includes("카페") || cat.includes("커피")) return 30;
+  if (cat.includes("음식") || cat.includes("맛집") || cat.includes("식당"))
+    return 60;
+  if (cat.includes("쇼핑")) return 45;
+  if (cat.includes("관광") || cat.includes("명소")) return 60;
+  if (cat.includes("공원") || cat.includes("산책")) return 45;
+  if (cat.includes("전시") || cat.includes("미술관") || cat.includes("박물관"))
+    return 90;
+  if (cat.includes("숙박")) return 60;
   return 45;
 };
 
 // 시간 문자열 파싱 (HH:MM -> 분)
 const parseTimeToMinutes = (timeStr: string): number => {
-  const [hours, minutes] = timeStr.split(':').map(Number);
+  const [hours, minutes] = timeStr.split(":").map(Number);
   return hours * 60 + minutes;
 };
 
@@ -397,14 +472,14 @@ const parseTimeToMinutes = (timeStr: string): number => {
 const formatMinutesToTime = (totalMinutes: number): string => {
   const hours = Math.floor(totalMinutes / 60) % 24;
   const minutes = totalMinutes % 60;
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
 };
 
 // 타임라인 시간 재계산
 const recalculateTimes = (timeline: TimelineItem[]): TimelineItem[] => {
   if (timeline.length === 0) return timeline;
 
-  const firstStartTime = timeline[0].time.split(' - ')[0];
+  const firstStartTime = timeline[0].time.split(" - ")[0];
   let currentMinutes = parseTimeToMinutes(firstStartTime);
 
   return timeline.map((item, index) => {
@@ -470,7 +545,9 @@ function SortablePlaceCard({
     zIndex: isDragging ? 1000 : 1,
   };
 
-  const { startTime, endTime, extraLabel, extraColor } = splitTimeAndExtra(item.time);
+  const { startTime, endTime, extraLabel, extraColor } = splitTimeAndExtra(
+    item.time,
+  );
   const categoryColors = getCategoryColor(item.category);
   const categoryIcon = getCategoryIcon(item.category);
 
@@ -488,15 +565,26 @@ function SortablePlaceCard({
         {/* 체크박스 (편집 모드에서만 표시) */}
         {isEditMode && (
           <Pressable style={styles.editCheckboxArea} onPress={onToggleSelect}>
-            <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
-              {isSelected && <Ionicons name="checkmark" size={14} color="#ffffff" />}
+            <View
+              style={[styles.checkbox, isSelected && styles.checkboxChecked]}
+            >
+              {isSelected && (
+                <Ionicons name="checkmark" size={14} color="#ffffff" />
+              )}
             </View>
           </Pressable>
         )}
 
         {/* 순서 마커 */}
         <Pressable
-          style={[styles.placeMarker, { backgroundColor: getCourseOrderColor(item.population_level || item.traffic_level) }]}
+          style={[
+            styles.placeMarker,
+            {
+              backgroundColor: getCourseOrderColor(
+                item.population_level || item.traffic_level,
+              ),
+            },
+          ]}
           onHoverIn={onHoverIn}
           onHoverOut={onHoverOut}
           onPress={onPress}
@@ -526,8 +614,18 @@ function SortablePlaceCard({
                 )}
               </View>
               {extraLabel && extraColor && (
-                <View style={[styles.timeBadge, { backgroundColor: extraColor + '22', borderColor: extraColor }]}>
-                  <Text style={[styles.timeBadgeText, { color: extraColor }]}>{extraLabel}</Text>
+                <View
+                  style={[
+                    styles.timeBadge,
+                    {
+                      backgroundColor: extraColor + "22",
+                      borderColor: extraColor,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.timeBadgeText, { color: extraColor }]}>
+                    {extraLabel}
+                  </Text>
                 </View>
               )}
             </View>
@@ -537,20 +635,35 @@ function SortablePlaceCard({
             </View>
           )}
 
-          <Text style={[styles.placeName, isEditMode && styles.placeNameEdit]}>{item.name}</Text>
+          <Text style={[styles.placeName, isEditMode && styles.placeNameEdit]}>
+            {item.name}
+          </Text>
 
           {/* 카테고리 배지 (고정일정이 아닌 경우만 표시) */}
-          {item.category !== '고정일정' && (
+          {item.category !== "고정일정" && (
             <View style={styles.placeMetaRow}>
-              <View style={[styles.categoryBadge, { backgroundColor: categoryColors.bg }]}>
-                <Ionicons name={categoryIcon as any} size={12} color={categoryColors.text} />
-                <Text style={[styles.categoryText, { color: categoryColors.text }]}>
+              <View
+                style={[
+                  styles.categoryBadge,
+                  { backgroundColor: categoryColors.bg },
+                ]}
+              >
+                <Ionicons
+                  name={categoryIcon as any}
+                  size={12}
+                  color={categoryColors.text}
+                />
+                <Text
+                  style={[styles.categoryText, { color: categoryColors.text }]}
+                >
                   {item.category}
                 </Text>
               </View>
               {item.category2 ? (
-                <View style={[styles.categoryBadge, { backgroundColor: '#f1f5f9' }]}>
-                  <Text style={[styles.categoryText, { color: '#475569' }]}>
+                <View
+                  style={[styles.categoryBadge, { backgroundColor: "#f1f5f9" }]}
+                >
+                  <Text style={[styles.categoryText, { color: "#475569" }]}>
                     {item.category2}
                   </Text>
                 </View>
@@ -558,49 +671,88 @@ function SortablePlaceCard({
             </View>
           )}
 
-          {!isEditMode && (item.population_level || (item.traffic_level && item.traffic_level !== '-')) && (
-            <View style={styles.statusRow}>
-              {item.population_level && (() => {
-                const popInfo = parsePopulationLevel(item.population_level);
-                return (
-                  <View style={[styles.statusBadge, { backgroundColor: popInfo.bgColor }]}>
-                    <View style={[styles.statusDot, { backgroundColor: popInfo.color }]} />
-                    <Text style={[styles.statusText, { color: popInfo.color }]}>{popInfo.text}</Text>
-                  </View>
-                );
-              })()}
-              {item.traffic_level && item.traffic_level !== '-' && (() => {
-                const trafficInfo = parsePopulationLevel(item.traffic_level);
-                return (
-                  <View style={[styles.statusBadge, { backgroundColor: trafficInfo.bgColor }]}>
-                    <Ionicons name="car" size={10} color={trafficInfo.color} />
-                    <Text style={[styles.statusText, { color: trafficInfo.color }]}>{trafficInfo.text}</Text>
-                  </View>
-                );
-              })()}
-            </View>
-          )}
+          {!isEditMode &&
+            (item.population_level ||
+              (item.traffic_level && item.traffic_level !== "-")) && (
+              <View style={styles.statusRow}>
+                {item.population_level &&
+                  (() => {
+                    const popInfo = parsePopulationLevel(item.population_level);
+                    return (
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          { backgroundColor: popInfo.bgColor },
+                        ]}
+                      >
+                        <View
+                          style={[
+                            styles.statusDot,
+                            { backgroundColor: popInfo.color },
+                          ]}
+                        />
+                        <Text
+                          style={[styles.statusText, { color: popInfo.color }]}
+                        >
+                          {popInfo.text}
+                        </Text>
+                      </View>
+                    );
+                  })()}
+                {item.traffic_level &&
+                  item.traffic_level !== "-" &&
+                  (() => {
+                    const trafficInfo = parsePopulationLevel(
+                      item.traffic_level,
+                    );
+                    return (
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          { backgroundColor: trafficInfo.bgColor },
+                        ]}
+                      >
+                        <Ionicons
+                          name="car"
+                          size={10}
+                          color={trafficInfo.color}
+                        />
+                        <Text
+                          style={[
+                            styles.statusText,
+                            { color: trafficInfo.color },
+                          ]}
+                        >
+                          {trafficInfo.text}
+                        </Text>
+                      </View>
+                    );
+                  })()}
+              </View>
+            )}
         </Pressable>
 
         {/* 오른쪽 액션 버튼 영역 */}
         {isEditMode ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginLeft: 8,
-            gap: 4,
-          }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              marginLeft: 8,
+              gap: 4,
+            }}
+          >
             {/* 삭제 버튼 */}
             <Pressable
               style={{
                 width: 32,
                 height: 32,
                 borderRadius: 8,
-                backgroundColor: '#fef2f2',
-                alignItems: 'center',
-                justifyContent: 'center',
+                backgroundColor: "#fef2f2",
+                alignItems: "center",
+                justifyContent: "center",
               }}
               onPress={onDelete}
             >
@@ -613,12 +765,12 @@ function SortablePlaceCard({
                 width: 32,
                 height: 32,
                 borderRadius: 8,
-                backgroundColor: '#eef2ff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                border: 'none',
-                cursor: 'grab',
+                backgroundColor: "#eef2ff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                cursor: "grab",
               }}
               {...attributes}
               {...listeners}
@@ -639,13 +791,13 @@ function SortablePlaceCard({
 // 카카오맵 스크립트 로드
 const loadKakaoMapsScript = (): Promise<void> => {
   return new Promise((resolve, reject) => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return reject(new Error('Not in browser environment'));
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return reject(new Error("Not in browser environment"));
     }
-    if (!KAKAO_API_KEY) return reject(new Error('NO_API_KEY'));
+    if (!KAKAO_API_KEY) return reject(new Error("NO_API_KEY"));
     if (window.kakao && window.kakao.maps) return resolve();
 
-    const id = 'kakao-maps-script';
+    const id = "kakao-maps-script";
     const existingScript = document.getElementById(id);
     if (existingScript) {
       const checkInterval = setInterval(() => {
@@ -657,7 +809,7 @@ const loadKakaoMapsScript = (): Promise<void> => {
       return;
     }
 
-    const script = document.createElement('script');
+    const script = document.createElement("script");
     script.id = id;
     script.async = true;
     script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_API_KEY}&autoload=false`;
@@ -665,10 +817,10 @@ const loadKakaoMapsScript = (): Promise<void> => {
       if (window.kakao && window.kakao.maps) {
         window.kakao.maps.load(() => resolve());
       } else {
-        reject(new Error('Kakao Maps failed to load'));
+        reject(new Error("Kakao Maps failed to load"));
       }
     };
-    script.onerror = () => reject(new Error('Failed to load Kakao Maps'));
+    script.onerror = () => reject(new Error("Failed to load Kakao Maps"));
     document.head.appendChild(script);
   });
 };
@@ -677,7 +829,8 @@ export default function ResultsScreen() {
   const router = useRouter();
   const { lastGeneratedPlan, setLastGeneratedPlan } = usePlaces();
   const { user } = useAuth();
-  const [activeDay, setActiveDay] = useState<string>('day1');
+  const [isRecalculating, setIsRecalculating] = useState<boolean>(false);
+  const [activeDay, setActiveDay] = useState<string>("day1");
   const [hoveredItem, setHoveredItem] = useState<number | null>(null);
   const [expandedTransit, setExpandedTransit] = useState<number | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
@@ -693,15 +846,21 @@ export default function ResultsScreen() {
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
   const [editedPlan, setEditedPlan] = useState<PlanData | null>(null);
   const [originalPlan, setOriginalPlan] = useState<PlanData | null>(null);
-  
+
   // 대체 장소 추천 관련 상태
   const [selectedSpots, setSelectedSpots] = useState<Set<string>>(new Set());
-  const [alternativesModalVisible, setAlternativesModalVisible] = useState<boolean>(false);
+  const [alternativesModalVisible, setAlternativesModalVisible] =
+    useState<boolean>(false);
   const [alternatives, setAlternatives] = useState<AlternativeSpot[]>([]);
-  const [isLoadingAlternatives, setIsLoadingAlternatives] = useState<boolean>(false);
-  const [deleteConfirmIndex, setDeleteConfirmIndex] = useState<number | null>(null);
+  const [isLoadingAlternatives, setIsLoadingAlternatives] =
+    useState<boolean>(false);
+  const [deleteConfirmIndex, setDeleteConfirmIndex] = useState<number | null>(
+    null,
+  );
 
-  const planData = (isEditMode && editedPlan ? editedPlan : lastGeneratedPlan) as PlanData | null;
+  const planData = (
+    isEditMode && editedPlan ? editedPlan : lastGeneratedPlan
+  ) as PlanData | null;
 
   // @dnd-kit 센서 설정
   const sensors = useSensors(
@@ -712,7 +871,7 @@ export default function ResultsScreen() {
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
-    })
+    }),
   );
 
   // 편집 모드 진입
@@ -726,24 +885,7 @@ export default function ResultsScreen() {
     }
   }, [lastGeneratedPlan]);
 
-  // 편집 모드 종료 (저장)
-  const saveAndExitEditMode = useCallback(() => {
-    if (editedPlan) {
-      setLastGeneratedPlan(editedPlan);
-      Toast.show({
-        type: 'success',
-        text1: '저장 완료',
-        text2: '일정이 수정되었습니다.',
-        position: 'top',
-        visibilityTime: 2000,
-      });
-    }
-    setIsEditMode(false);
-    setEditedPlan(null);
-    setOriginalPlan(null);
-  }, [editedPlan, setLastGeneratedPlan]);
-
-  // 편집 취소
+  // 편집 취소 (에러 해결용: 반드시 정의되어야 함)
   const cancelEditMode = useCallback(() => {
     setIsEditMode(false);
     setEditedPlan(null);
@@ -753,76 +895,144 @@ export default function ResultsScreen() {
     setAlternatives([]);
   }, []);
 
-  // 원본으로 초기화
+  // 원본 일정으로 초기화하는 함수
   const resetToOriginal = useCallback(() => {
     if (originalPlan) {
+      // 1. editedPlan을 처음에 복사해둔 originalPlan으로 덮어씀
       setEditedPlan(deepClone(originalPlan));
+
+      // 2. 사용자에게 알림 표시
       Toast.show({
-        type: 'info',
-        text1: '초기화',
-        text2: '원본 일정으로 되돌렸습니다.',
-        position: 'top',
+        type: "info",
+        text1: "초기화 완료",
+        text2: "편집 전 원본 일정으로 되돌렸습니다.",
+        position: "top",
         visibilityTime: 2000,
       });
     }
   }, [originalPlan]);
 
-  // 장소 삭제
-  const deletePlace = useCallback((dayKey: string, placeIndex: number) => {
+  // 완료 버튼 클릭 시 - 서버 일괄 재계산 및 DB 저장
+  const saveAndExitEditMode = useCallback(async () => {
     if (!editedPlan) return;
 
-    const updatedPlan = deepClone(editedPlan);
-    const dayPlan = updatedPlan.variants[dayKey];
-    const timeline = dayPlan.timelines.fastest_version;
-    const placeToDelete = timeline[placeIndex];
+    setIsRecalculating(true); // 로딩 시작 (스피너 작동)
 
-    // 타임라인에서 제거
-    dayPlan.timelines.fastest_version = timeline.filter((_, i) => i !== placeIndex);
-    dayPlan.timelines.min_transfer_version = dayPlan.timelines.min_transfer_version.filter(
-      (item) => item.name !== placeToDelete.name
-    );
+    try {
+      const dayPlan = editedPlan.variants[activeDay];
+      const timeline = dayPlan.timelines.fastest_version;
 
-    // route/restaurants/accommodations에서도 제거
-    dayPlan.route = dayPlan.route.filter((r) => r.name !== placeToDelete.name);
-    dayPlan.restaurants = dayPlan.restaurants.filter((r) => r.name !== placeToDelete.name);
-    dayPlan.accommodations = dayPlan.accommodations.filter((a) => a.name !== placeToDelete.name);
+      // 서버로 보낼 장소 노드 데이터 조립
+      const remainingPlaces: PlaceNode[] = timeline.map((item) => {
+        const origin = dayPlan.route.find(
+          (r) => r.name === item.name || (r as any).title === item.name,
+        );
+        return {
+          name: item.name,
+          category: item.category,
+          category2: item.category2 || "",
+          lat: origin?.lat || 0,
+          lng: origin?.lng || 0,
+          addr: origin?.addr || "",
+          // origin을 못 찾더라도 category가 '고정일정'이면 타입을 유지해줌
+          type:
+            (origin as any)?.type ||
+            (item.category === "고정일정" ? "fixed" : "spot"),
+          stay: (origin as any)?.stay || 60,
+          window: (origin as any)?.window || null,
+          orig_time_str: (origin as any)?.orig_time_str || null,
+        };
+      });
 
-    // 시간 재계산
-    dayPlan.timelines.fastest_version = recalculateTimes(dayPlan.timelines.fastest_version);
+      // 백엔드 재계산 API 호출 (백엔드에서 DB 저장까지 수행)
+      const response = await planService.recalculateRoute(editedPlan.plan_id, {
+        day_key: activeDay,
+        remaining_places: remainingPlaces,
+      });
 
-    setEditedPlan(updatedPlan);
-    setDeleteConfirmIndex(null);
+      // 서버 응답 결과로 최종 상태 업데이트
+      const finalPlan = deepClone(editedPlan);
+      finalPlan.variants[activeDay].route = response.route;
+      finalPlan.variants[activeDay].timelines = response.timelines;
 
-    Toast.show({
-      type: 'success',
-      text1: '삭제 완료',
-      text2: `${placeToDelete.name}이(가) 삭제되었습니다.`,
-      position: 'top',
-      visibilityTime: 2000,
-    });
-  }, [editedPlan]);
+      setLastGeneratedPlan(finalPlan); // 전역 상태 갱신
+      setIsEditMode(false);
+      setEditedPlan(null);
+      setOriginalPlan(null);
 
-  // 드래그 앤 드롭 완료 핸들러
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id || !editedPlan) return;
+      Toast.show({
+        type: "success",
+        text1: "동선 최적화 완료!",
+        text2: "변경된 일정이 서버에 저장되었습니다.",
+      });
+    } catch (error) {
+      console.error("재계산 실패:", error);
+      Toast.show({ type: "error", text1: "저장 실패" });
+    } finally {
+      setIsRecalculating(false); // 로딩 종료
+    }
+  }, [editedPlan, activeDay, setLastGeneratedPlan]);
 
-    const oldIndex = parseInt(String(active.id).split('-')[1]);
-    const newIndex = parseInt(String(over.id).split('-')[1]);
+  // 장소 삭제 (화면에서만 즉시 삭제)
+  const deletePlace = useCallback(
+    (dayKey: string, placeIndex: number) => {
+      if (!editedPlan) return;
+      const updatedPlan = deepClone(editedPlan);
+      const dayPlan = updatedPlan.variants[dayKey];
+      const timeline = dayPlan.timelines.fastest_version;
+      const placeToDelete = timeline[placeIndex];
 
-    const updatedPlan = deepClone(editedPlan);
-    const dayPlan = updatedPlan.variants[activeDay];
-    const newTimeline = arrayMove(dayPlan.timelines.fastest_version, oldIndex, newIndex);
+      dayPlan.timelines.fastest_version = timeline.filter(
+        (_, i) => i !== placeIndex,
+      );
+      dayPlan.route = dayPlan.route.filter(
+        (r) =>
+          r.name !== placeToDelete.name &&
+          (r as any).title !== placeToDelete.name,
+      );
 
-    // 시간 재계산
-    dayPlan.timelines.fastest_version = recalculateTimes(newTimeline);
+      dayPlan.timelines.fastest_version = recalculateTimes(
+        dayPlan.timelines.fastest_version,
+      );
+      setEditedPlan(updatedPlan);
 
-    // route 배열도 순서 맞추기
-    const routeOrder = dayPlan.timelines.fastest_version.map((t) => t.name);
-    dayPlan.route.sort((a, b) => routeOrder.indexOf(a.name) - routeOrder.indexOf(b.name));
+      Toast.show({
+        type: "info",
+        text1: "목록에서 제거됨",
+        text2: "[완료]를 누르면 동선이 최적화됩니다.",
+      });
+    },
+    [editedPlan],
+  );
 
-    setEditedPlan(updatedPlan);
-  }, [editedPlan, activeDay]);
+  // 드래그 앤 드롭 완료 (화면 순서만 즉시 변경)
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id || !editedPlan) return;
+
+      const oldIndex = parseInt(String(active.id).split("-")[1]);
+      const newIndex = parseInt(String(over.id).split("-")[1]);
+
+      const updatedPlan = deepClone(editedPlan);
+      const dayPlan = updatedPlan.variants[activeDay];
+
+      const newTimeline = arrayMove(
+        dayPlan.timelines.fastest_version,
+        oldIndex,
+        newIndex,
+      );
+      dayPlan.timelines.fastest_version = recalculateTimes(newTimeline);
+
+      const routeOrder = dayPlan.timelines.fastest_version.map((t) => t.name);
+      dayPlan.route.sort(
+        (a, b) => routeOrder.indexOf(a.name) - routeOrder.indexOf(b.name),
+      );
+
+      setEditedPlan(updatedPlan);
+    },
+    [editedPlan, activeDay],
+  );
 
   // 장소 선택 토글
   const toggleSpotSelection = useCallback((spotName: string) => {
@@ -841,10 +1051,13 @@ export default function ResultsScreen() {
   const requestAlternatives = useCallback(async () => {
     if (!planData || !user || selectedSpots.size === 0) {
       Toast.show({
-        type: 'info',
-        text1: '알림',
-        text2: selectedSpots.size === 0 ? '대체하고 싶은 장소를 선택해주세요.' : '로그인이 필요합니다.',
-        position: 'top',
+        type: "info",
+        text1: "알림",
+        text2:
+          selectedSpots.size === 0
+            ? "대체하고 싶은 장소를 선택해주세요."
+            : "로그인이 필요합니다.",
+        position: "top",
         visibilityTime: 2000,
       });
       return;
@@ -861,10 +1074,10 @@ export default function ResultsScreen() {
 
       if (response.alternatives.length === 0) {
         Toast.show({
-          type: 'info',
-          text1: '알림',
-          text2: '대체 장소를 찾을 수 없습니다.',
-          position: 'top',
+          type: "info",
+          text1: "알림",
+          text2: "대체 장소를 찾을 수 없습니다.",
+          position: "top",
           visibilityTime: 2000,
         });
         return;
@@ -873,13 +1086,16 @@ export default function ResultsScreen() {
       setAlternatives(response.alternatives);
       setAlternativesModalVisible(true);
     } catch (error) {
-      console.error('대체 장소 추천 실패:', error);
-      const errorMessage = error instanceof Error ? error.message : '대체 장소 추천에 실패했습니다.';
+      console.error("대체 장소 추천 실패:", error);
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "대체 장소 추천에 실패했습니다.";
       Toast.show({
-        type: 'error',
-        text1: '오류',
+        type: "error",
+        text1: "오류",
         text2: errorMessage,
-        position: 'top',
+        position: "top",
         visibilityTime: 3000,
       });
     } finally {
@@ -888,59 +1104,70 @@ export default function ResultsScreen() {
   }, [planData, user, selectedSpots, activeDay]);
 
   // 대체 장소로 교체
-  const replaceSpotWithAlternative = useCallback((oldSpotName: string, alternative: AlternativeSpot) => {
-    if (!editedPlan) return;
+  const replaceSpotWithAlternative = useCallback(
+    (oldSpotName: string, alternative: AlternativeSpot) => {
+      if (!editedPlan) return;
 
-    const updatedPlan = deepClone(editedPlan);
-    const dayPlan = updatedPlan.variants[activeDay];
-    const timeline = dayPlan.timelines.fastest_version;
+      const updatedPlan = deepClone(editedPlan);
+      const dayPlan = updatedPlan.variants[activeDay];
+      const timeline = dayPlan.timelines.fastest_version;
 
-    // 타임라인에서 장소 찾아서 교체
-    const spotIndex = timeline.findIndex((item) => item.name === oldSpotName);
-    if (spotIndex === -1) return;
+      // 타임라인에서 장소 찾아서 교체
+      const spotIndex = timeline.findIndex((item) => item.name === oldSpotName);
+      if (spotIndex === -1) return;
 
-    // 새 장소 정보로 교체
-    const oldSpot = timeline[spotIndex];
-    timeline[spotIndex] = {
-      ...oldSpot,
-      name: alternative.name,
-      category: alternative.category,
-    };
+      // 새 장소 정보로 교체
+      const oldSpot = timeline[spotIndex];
+      timeline[spotIndex] = {
+        ...oldSpot,
+        name: alternative.name,
+        category: alternative.category,
+      };
 
-    // route/restaurants/accommodations 배열도 업데이트
-    const updateArray = (arr: { name: string; category: string; category2?: string; lat: number; lng: number }[]) => {
-      const idx = arr.findIndex((item) => item.name === oldSpotName);
-      if (idx !== -1) {
-        arr[idx] = {
-          name: alternative.name,
-          category: alternative.category,
-          category2: alternative.category2 || alternative.category,
-          lat: alternative.lat,
-          lng: alternative.lng,
-        };
-      }
-    };
+      // route/restaurants/accommodations 배열도 업데이트
+      const updateArray = (
+        arr: {
+          name: string;
+          category: string;
+          category2?: string;
+          lat: number;
+          lng: number;
+        }[],
+      ) => {
+        const idx = arr.findIndex((item) => item.name === oldSpotName);
+        if (idx !== -1) {
+          arr[idx] = {
+            name: alternative.name,
+            category: alternative.category,
+            category2: alternative.category2 || alternative.category,
+            lat: alternative.lat,
+            lng: alternative.lng,
+          };
+        }
+      };
 
-    updateArray(dayPlan.route);
-    updateArray(dayPlan.restaurants);
-    updateArray(dayPlan.accommodations);
+      updateArray(dayPlan.route);
+      updateArray(dayPlan.restaurants);
+      updateArray(dayPlan.accommodations);
 
-    // 시간 재계산
-    dayPlan.timelines.fastest_version = recalculateTimes(timeline);
+      // 시간 재계산
+      dayPlan.timelines.fastest_version = recalculateTimes(timeline);
 
-    setEditedPlan(updatedPlan);
-    setSelectedSpots(new Set());
-    setAlternativesModalVisible(false);
-    setAlternatives([]);
+      setEditedPlan(updatedPlan);
+      setSelectedSpots(new Set());
+      setAlternativesModalVisible(false);
+      setAlternatives([]);
 
-    Toast.show({
-      type: 'success',
-      text1: '교체 완료',
-      text2: `${oldSpotName} → ${alternative.name}`,
-      position: 'top',
-      visibilityTime: 2000,
-    });
-  }, [editedPlan, activeDay]);
+      Toast.show({
+        type: "success",
+        text1: "교체 완료",
+        text2: `${oldSpotName} → ${alternative.name}`,
+        position: "top",
+        visibilityTime: 2000,
+      });
+    },
+    [editedPlan, activeDay],
+  );
 
   // 날짜 목록
   const dayKeys = useMemo(() => {
@@ -964,19 +1191,24 @@ export default function ResultsScreen() {
     }
 
     // timeline이 비어있으면 route 데이터를 timeline 형태로 변환
-    const routeAsTimeline: TimelineItem[] = currentDayData.route.map((item: any, index) => {
-      // 고정일정: name/category가 없고 title/place_name이 있는 항목
-      const isFixed = !item.name && (item.title !== undefined || item.place_name);
-      return {
-        name: isFixed ? (item.title || '고정일정') : (item.name || ''),
-        category: isFixed ? '고정일정' : (item.category || ''),
-        category2: item.category2,
-        time: isFixed ? `${item.start_time || ''} - ${item.end_time || ''}` : '',
-        transit_to_here: [],
-        population_level: undefined,
-        traffic_level: undefined,
-      };
-    });
+    const routeAsTimeline: TimelineItem[] = currentDayData.route.map(
+      (item: any, index) => {
+        // 고정일정: name/category가 없고 title/place_name이 있는 항목
+        const isFixed =
+          !item.name && (item.title !== undefined || item.place_name);
+        return {
+          name: isFixed ? item.title || "고정일정" : item.name || "",
+          category: isFixed ? "고정일정" : item.category || "",
+          category2: item.category2,
+          time: isFixed
+            ? `${item.start_time || ""} - ${item.end_time || ""}`
+            : "",
+          transit_to_here: [],
+          population_level: undefined,
+          traffic_level: undefined,
+        };
+      },
+    );
 
     return routeAsTimeline;
   }, [currentDayData]);
@@ -984,36 +1216,73 @@ export default function ResultsScreen() {
   // 모든 장소 좌표
   const allLocations = useMemo(() => {
     if (!currentDayData) return [];
-    const locations: { lat: number; lng: number; name: string; category: string; address?: string }[] = [];
+    const locations: {
+      lat: number;
+      lng: number;
+      name: string;
+      category: string;
+      address?: string;
+    }[] = [];
 
     timeline.forEach((item) => {
       // 일반 장소: name으로 검색
-      const routeItem = currentDayData.route.find(r => r.name === item.name);
+      const routeItem = currentDayData.route.find((r) => r.name === item.name);
       if (routeItem) {
-        locations.push({ lat: routeItem.lat, lng: routeItem.lng, name: item.name, category: item.category, address: routeItem.addr || '' });
+        locations.push({
+          lat: routeItem.lat,
+          lng: routeItem.lng,
+          name: item.name,
+          category: item.category,
+          address: routeItem.addr || "",
+        });
         return;
       }
-      const restaurantItem = currentDayData.restaurants.find(r => r.name === item.name);
+      const restaurantItem = currentDayData.restaurants.find(
+        (r) => r.name === item.name,
+      );
       if (restaurantItem) {
-        locations.push({ lat: restaurantItem.lat, lng: restaurantItem.lng, name: item.name, category: item.category, address: restaurantItem.addr || '' });
+        locations.push({
+          lat: restaurantItem.lat,
+          lng: restaurantItem.lng,
+          name: item.name,
+          category: item.category,
+          address: restaurantItem.addr || "",
+        });
         return;
       }
-      const accommodationItem = currentDayData.accommodations.find(a => a.name === item.name);
+      const accommodationItem = currentDayData.accommodations.find(
+        (a) => a.name === item.name,
+      );
       if (accommodationItem) {
-        locations.push({ lat: accommodationItem.lat, lng: accommodationItem.lng, name: item.name, category: item.category, address: accommodationItem.addr || '' });
+        locations.push({
+          lat: accommodationItem.lat,
+          lng: accommodationItem.lng,
+          name: item.name,
+          category: item.category,
+          address: accommodationItem.addr || "",
+        });
         return;
       }
       // 고정 일정: route에서 start_time/end_time이 있는 고정일정 항목을 찾음
       // title 매칭 또는 카테고리가 '고정일정'이면 route에서 고정일정 구조를 가진 항목 검색
-      const fixedEventItem = currentDayData.route.find((r: any) =>
-        r.title === item.name ||
-        (item.category === '고정일정' && r.start_time && r.end_time && !r.name)
+      const fixedEventItem = currentDayData.route.find(
+        (r: any) =>
+          r.title === item.name ||
+          (item.category === "고정일정" &&
+            r.start_time &&
+            r.end_time &&
+            !r.name),
       );
       if (fixedEventItem && fixedEventItem.lat && fixedEventItem.lng) {
-        const placeName = (fixedEventItem as any).place_name || (fixedEventItem as any).address || '';
-        const displayName = (fixedEventItem as any).title && (fixedEventItem as any).title !== placeName
-          ? (fixedEventItem as any).title
-          : '고정일정';
+        const placeName =
+          (fixedEventItem as any).place_name ||
+          (fixedEventItem as any).address ||
+          "";
+        const displayName =
+          (fixedEventItem as any).title &&
+          (fixedEventItem as any).title !== placeName
+            ? (fixedEventItem as any).title
+            : "고정일정";
         locations.push({
           lat: fixedEventItem.lat,
           lng: fixedEventItem.lng,
@@ -1040,7 +1309,9 @@ export default function ResultsScreen() {
         // 각 저장된 플랜의 plan_id를 비교하여 현재 플랜이 저장되었는지 확인
         for (const item of response.items) {
           try {
-            const detail = await planService.getSavedPlanDetail(item.saved_plan_id);
+            const detail = await planService.getSavedPlanDetail(
+              item.saved_plan_id,
+            );
             if (detail.plan_id === planData.plan_id) {
               setIsSaved(true);
               setSavedPlanId(item.saved_plan_id);
@@ -1053,7 +1324,7 @@ export default function ResultsScreen() {
         setIsSaved(false);
         setSavedPlanId(null);
       } catch (error) {
-        console.error('저장 상태 확인 실패:', error);
+        console.error("저장 상태 확인 실패:", error);
         setIsSaved(false);
         setSavedPlanId(null);
       }
@@ -1064,7 +1335,13 @@ export default function ResultsScreen() {
   // 일정 저장 (서버에 저장)
   const handleSave = useCallback(async () => {
     if (!planData || !user) {
-      Toast.show({ type: 'info', text1: '알림', text2: '로그인이 필요합니다.', position: 'top', visibilityTime: 2000 });
+      Toast.show({
+        type: "info",
+        text1: "알림",
+        text2: "로그인이 필요합니다.",
+        position: "top",
+        visibilityTime: 2000,
+      });
       return;
     }
 
@@ -1078,11 +1355,11 @@ export default function ResultsScreen() {
         setIsSaved(false);
         setSavedPlanId(null);
         Toast.show({
-          type: 'success',
-          text1: '저장 해제',
-          text2: '저장된 일정이 삭제되었습니다.',
-          position: 'top',
-          visibilityTime: 2000
+          type: "success",
+          text1: "저장 해제",
+          text2: "저장된 일정이 삭제되었습니다.",
+          position: "top",
+          visibilityTime: 2000,
         });
       } else {
         // 저장되지 않은 상태 → 저장
@@ -1094,22 +1371,23 @@ export default function ResultsScreen() {
         setIsSaved(true);
         setSavedPlanId(result.saved_plan_id);
         Toast.show({
-          type: 'success',
-          text1: '저장 완료',
-          text2: '일정이 저장되었습니다.',
-          position: 'top',
-          visibilityTime: 2000
+          type: "success",
+          text1: "저장 완료",
+          text2: "일정이 저장되었습니다.",
+          position: "top",
+          visibilityTime: 2000,
         });
       }
     } catch (error) {
-      console.error('저장/삭제 실패:', error);
-      const errorMessage = error instanceof Error ? error.message : '처리에 실패했습니다.';
+      console.error("저장/삭제 실패:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "처리에 실패했습니다.";
       Toast.show({
-        type: 'error',
-        text1: '오류',
+        type: "error",
+        text1: "오류",
         text2: errorMessage,
-        position: 'top',
-        visibilityTime: 3000
+        position: "top",
+        visibilityTime: 3000,
       });
     } finally {
       setIsSaving(false);
@@ -1120,21 +1398,24 @@ export default function ResultsScreen() {
   const handleShare = useCallback(async () => {
     if (!planData) return;
 
-    const shareText = `${planData.summary.region} 여행 일정\n${planData.summary.start_date} ~ ${planData.summary.end_date}\n\n` +
-      dayKeys.map((day, idx) => {
-        const dayData = planData.variants[day];
-        const dayTimeline = dayData?.timelines?.fastest_version || [];
-        return `Day ${idx + 1}:\n${dayTimeline.map((item, i) => `  ${i + 1}. ${item.name} (${item.time})`).join('\n')}`;
-      }).join('\n\n');
+    const shareText =
+      `${planData.summary.region} 여행 일정\n${planData.summary.start_date} ~ ${planData.summary.end_date}\n\n` +
+      dayKeys
+        .map((day, idx) => {
+          const dayData = planData.variants[day];
+          const dayTimeline = dayData?.timelines?.fastest_version || [];
+          return `Day ${idx + 1}:\n${dayTimeline.map((item, i) => `  ${i + 1}. ${item.name} (${item.time})`).join("\n")}`;
+        })
+        .join("\n\n");
 
-    if (typeof navigator !== 'undefined' && navigator.share) {
+    if (typeof navigator !== "undefined" && navigator.share) {
       try {
         await navigator.share({
           title: `${planData.summary.region} 여행 일정`,
           text: shareText,
         });
       } catch (error) {
-        if ((error as Error).name !== 'AbortError') {
+        if ((error as Error).name !== "AbortError") {
           // 공유 취소가 아닌 경우 클립보드에 복사
           await copyToClipboard(shareText);
         }
@@ -1147,51 +1428,77 @@ export default function ResultsScreen() {
   // 클립보드 복사
   const copyToClipboard = async (text: string) => {
     try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(text);
-        Toast.show({ type: 'success', text1: '복사 완료', text2: '일정이 클립보드에 복사되었습니다.', position: 'top', visibilityTime: 2000 });
+        Toast.show({
+          type: "success",
+          text1: "복사 완료",
+          text2: "일정이 클립보드에 복사되었습니다.",
+          position: "top",
+          visibilityTime: 2000,
+        });
       }
     } catch (error) {
-      console.error('클립보드 복사 실패:', error);
-      Toast.show({ type: 'error', text1: '오류', text2: '복사에 실패했습니다.', position: 'top', visibilityTime: 2000 });
+      console.error("클립보드 복사 실패:", error);
+      Toast.show({
+        type: "error",
+        text1: "오류",
+        text2: "복사에 실패했습니다.",
+        position: "top",
+        visibilityTime: 2000,
+      });
     }
   };
 
   // 특정 장소로 지도 줌 인
-  const zoomToLocation = useCallback((index: number) => {
-    if (!mapInstanceRef.current || !window.kakao || !allLocations[index]) return;
+  const zoomToLocation = useCallback(
+    (index: number) => {
+      if (!mapInstanceRef.current || !window.kakao || !allLocations[index])
+        return;
 
-    const location = allLocations[index];
-    const moveLatLng = new window.kakao.maps.LatLng(location.lat, location.lng);
+      const location = allLocations[index];
+      const moveLatLng = new window.kakao.maps.LatLng(
+        location.lat,
+        location.lng,
+      );
 
-    // 부드럽게 이동 및 줌 인
-    mapInstanceRef.current.panTo(moveLatLng);
-    setTimeout(() => {
-      mapInstanceRef.current.setLevel(3, { animate: true });
-    }, 300);
-  }, [allLocations]);
+      // 부드럽게 이동 및 줌 인
+      mapInstanceRef.current.panTo(moveLatLng);
+      setTimeout(() => {
+        mapInstanceRef.current.setLevel(3, { animate: true });
+      }, 300);
+    },
+    [allLocations],
+  );
 
   // 지도 초기화
   useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    if (!mapContainerRef.current || !KAKAO_API_KEY || allLocations.length === 0) return;
+    if (Platform.OS !== "web") return;
+    if (typeof window === "undefined" || typeof document === "undefined")
+      return;
+    if (!mapContainerRef.current || !KAKAO_API_KEY || allLocations.length === 0)
+      return;
 
     loadKakaoMapsScript()
       .then(() => {
-        if (typeof window === 'undefined' || !window.kakao || !mapContainerRef.current) return;
+        if (
+          typeof window === "undefined" ||
+          !window.kakao ||
+          !mapContainerRef.current
+        )
+          return;
 
-        markersRef.current.forEach(marker => marker.setMap(null));
+        markersRef.current.forEach((marker) => marker.setMap(null));
         markersRef.current = [];
-        overlaysRef.current.forEach(overlay => overlay.setMap(null));
+        overlaysRef.current.forEach((overlay) => overlay.setMap(null));
         overlaysRef.current = [];
         if (polylineRef.current) {
           polylineRef.current.setMap(null);
           polylineRef.current = null;
         }
 
-        const lats = allLocations.map(l => l.lat);
-        const lngs = allLocations.map(l => l.lng);
+        const lats = allLocations.map((l) => l.lat);
+        const lngs = allLocations.map((l) => l.lng);
         const centerLat = (Math.min(...lats) + Math.max(...lats)) / 2;
         const centerLng = (Math.min(...lngs) + Math.max(...lngs)) / 2;
 
@@ -1201,34 +1508,45 @@ export default function ResultsScreen() {
         };
 
         if (!mapInstanceRef.current) {
-          mapInstanceRef.current = new window.kakao.maps.Map(mapContainerRef.current, options);
+          mapInstanceRef.current = new window.kakao.maps.Map(
+            mapContainerRef.current,
+            options,
+          );
         } else {
-          mapInstanceRef.current.setCenter(new window.kakao.maps.LatLng(centerLat, centerLng));
+          mapInstanceRef.current.setCenter(
+            new window.kakao.maps.LatLng(centerLat, centerLng),
+          );
         }
 
         const bounds = new window.kakao.maps.LatLngBounds();
-        allLocations.forEach(loc => {
+        allLocations.forEach((loc) => {
           bounds.extend(new window.kakao.maps.LatLng(loc.lat, loc.lng));
         });
         mapInstanceRef.current.setBounds(bounds);
 
         // 경로 라인 그리기
         if (allLocations.length > 1) {
-          const path = allLocations.map(loc => new window.kakao.maps.LatLng(loc.lat, loc.lng));
+          const path = allLocations.map(
+            (loc) => new window.kakao.maps.LatLng(loc.lat, loc.lng),
+          );
           polylineRef.current = new window.kakao.maps.Polyline({
             path,
             strokeWeight: 4,
-            strokeColor: '#6366f1',
+            strokeColor: "#6366f1",
             strokeOpacity: 0.7,
-            strokeStyle: 'solid',
+            strokeStyle: "solid",
           });
           polylineRef.current.setMap(mapInstanceRef.current);
         }
 
         // 마커 생성 (순서 1, 2, 3, 4 + 혼잡도 색상: 보통=노랑, 혼잡=빨강, 그 외=회색)
         allLocations.forEach((location, index) => {
-          const markerPosition = new window.kakao.maps.LatLng(location.lat, location.lng);
-          const level = timeline[index]?.population_level || timeline[index]?.traffic_level;
+          const markerPosition = new window.kakao.maps.LatLng(
+            location.lat,
+            location.lng,
+          );
+          const level =
+            timeline[index]?.population_level || timeline[index]?.traffic_level;
           const orderColor = getCourseOrderColor(level);
           const orderLabel = getOrderMarker(index);
 
@@ -1246,7 +1564,11 @@ export default function ResultsScreen() {
           const markerImageSrc = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgString)}`;
           const imageSize = new window.kakao.maps.Size(32, 40);
           const imageOption = { offset: new window.kakao.maps.Point(16, 40) };
-          const markerImage = new window.kakao.maps.MarkerImage(markerImageSrc, imageSize, imageOption);
+          const markerImage = new window.kakao.maps.MarkerImage(
+            markerImageSrc,
+            imageSize,
+            imageOption,
+          );
 
           const marker = new window.kakao.maps.Marker({
             position: markerPosition,
@@ -1256,7 +1578,7 @@ export default function ResultsScreen() {
           // 호버 시 이름 + 주소 표시 오버레이
           const addressHtml = location.address
             ? `<div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${location.address}</div>`
-            : '';
+            : "";
           const overlayContent = `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.12);pointer-events:none;">
             <div style="font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;">${location.name}</div>
             ${addressHtml}
@@ -1268,8 +1590,12 @@ export default function ResultsScreen() {
             zIndex: 10,
           });
 
-          window.kakao.maps.event.addListener(marker, 'mouseover', () => overlay.setMap(mapInstanceRef.current));
-          window.kakao.maps.event.addListener(marker, 'mouseout', () => overlay.setMap(null));
+          window.kakao.maps.event.addListener(marker, "mouseover", () =>
+            overlay.setMap(mapInstanceRef.current),
+          );
+          window.kakao.maps.event.addListener(marker, "mouseout", () =>
+            overlay.setMap(null),
+          );
 
           marker.setMap(mapInstanceRef.current);
           markersRef.current.push(marker);
@@ -1277,7 +1603,7 @@ export default function ResultsScreen() {
         });
       })
       .catch((e) => {
-        console.error('카카오맵 초기화 실패', e);
+        console.error("카카오맵 초기화 실패", e);
       });
   }, [allLocations, activeDay, timeline]);
 
@@ -1285,11 +1611,14 @@ export default function ResultsScreen() {
   const formatDate = (dateStr: string, dayIndex: number) => {
     const date = new Date(dateStr);
     date.setDate(date.getDate() + dayIndex);
-    const days = ['일', '월', '화', '수', '목', '금', '토'];
+    const days = ["일", "월", "화", "수", "목", "금", "토"];
     const month = date.getMonth() + 1;
     const day = date.getDate();
     const dayOfWeek = days[date.getDay()];
-    return { full: `${month}월 ${day}일 (${dayOfWeek})`, short: `${month}.${day}` };
+    return {
+      full: `${month}월 ${day}일 (${dayOfWeek})`,
+      short: `${month}.${day}`,
+    };
   };
 
   if (!planData || !currentDayData) {
@@ -1301,8 +1630,13 @@ export default function ResultsScreen() {
               <Ionicons name="map-outline" size={48} color="#94a3b8" />
             </View>
             <Text style={styles.emptyTitle}>아직 생성된 일정이 없어요</Text>
-            <Text style={styles.emptyText}>코스 조건을 입력하고{'\n'}나만의 여행 일정을 만들어보세요</Text>
-            <Pressable style={styles.emptyButton} onPress={() => router.push('/course')}>
+            <Text style={styles.emptyText}>
+              코스 조건을 입력하고{"\n"}나만의 여행 일정을 만들어보세요
+            </Text>
+            <Pressable
+              style={styles.emptyButton}
+              onPress={() => router.push("/course")}
+            >
               <Text style={styles.emptyButtonText}>일정 만들기</Text>
             </Pressable>
           </View>
@@ -1311,7 +1645,7 @@ export default function ResultsScreen() {
     );
   }
 
-  const dayIndex = parseInt(activeDay.replace('day', '')) - 1;
+  const dayIndex = parseInt(activeDay.replace("day", "")) - 1;
   const currentDateInfo = formatDate(planData.summary.start_date, dayIndex);
 
   return (
@@ -1319,96 +1653,129 @@ export default function ResultsScreen() {
       <View style={styles.mainContainer}>
         {/* 왼쪽: 일정 패널 */}
         <View style={styles.leftPanel}>
-        {/* 헤더 */}
-        <View style={styles.header}>
-          <Pressable style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="chevron-back" size={24} color="#0f172a" />
-          </Pressable>
-          <View style={styles.headerInfo}>
-            <Text style={styles.headerTitle}>{planData.summary.region} 코스 추천</Text>
-            <Text style={styles.headerSubtitle}>
-              {planData.summary.start_date} ~ {planData.summary.end_date} · {dayKeys.length}일
-            </Text>
+          {/* 헤더 */}
+          <View style={styles.header}>
+            <Pressable style={styles.backButton} onPress={() => router.back()}>
+              <Ionicons name="chevron-back" size={24} color="#0f172a" />
+            </Pressable>
+            <View style={styles.headerInfo}>
+              <Text style={styles.headerTitle}>
+                {planData.summary.region} 코스 추천
+              </Text>
+              <Text style={styles.headerSubtitle}>
+                {planData.summary.start_date} ~ {planData.summary.end_date} ·{" "}
+                {dayKeys.length}일
+              </Text>
+            </View>
+            <View style={styles.headerActions}>
+              {!isEditMode && (
+                <>
+                  <Pressable
+                    style={styles.headerActionBtn}
+                    onPress={handleShare}
+                  >
+                    <Ionicons name="share-outline" size={20} color="#64748b" />
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.headerActionBtn,
+                      isSaved && styles.headerActionBtnActive,
+                      (isSaving || !user) && styles.headerActionBtnDisabled,
+                    ]}
+                    onPress={handleSave}
+                    disabled={isSaving || !user}
+                  >
+                    <Ionicons
+                      name={isSaved ? "bookmark" : "bookmark-outline"}
+                      size={20}
+                      color={
+                        isSaved ? "#6366f1" : !user ? "#cbd5e1" : "#64748b"
+                      }
+                    />
+                  </Pressable>
+                </>
+              )}
+            </View>
           </View>
-          <View style={styles.headerActions}>
-            {!isEditMode && (
+
+          {/* 편집/보기 공통 툴바 */}
+          <View style={styles.editToolbar}>
+            {isEditMode ? (
               <>
-                <Pressable style={styles.headerActionBtn} onPress={handleShare}>
-                  <Ionicons name="share-outline" size={20} color="#64748b" />
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.headerActionBtn,
-                    isSaved && styles.headerActionBtnActive,
-                    (isSaving || !user) && styles.headerActionBtnDisabled,
-                  ]}
-                  onPress={handleSave}
-                  disabled={isSaving || !user}
-                >
-                  <Ionicons
-                    name={isSaved ? 'bookmark' : 'bookmark-outline'}
-                    size={20}
-                    color={isSaved ? '#6366f1' : !user ? '#cbd5e1' : '#64748b'}
-                  />
-                </Pressable>
+                <View style={styles.editToolbarActions}>
+                  <Pressable
+                    style={styles.editToolbarButton}
+                    onPress={cancelEditMode}
+                  >
+                    <Text style={styles.editToolbarButtonText}>취소</Text>
+                  </Pressable>
+                  {selectedSpots.size > 0 && (
+                    <Pressable
+                      style={[
+                        styles.editToolbarButton,
+                        styles.editToolbarPrimaryButton,
+                      ]}
+                      onPress={requestAlternatives}
+                      disabled={isLoadingAlternatives}
+                    >
+                      <Text style={styles.editToolbarPrimaryText}>
+                        {isLoadingAlternatives
+                          ? "추천 중..."
+                          : `대체 추천 (${selectedSpots.size})`}
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    style={styles.editToolbarIconButton}
+                    onPress={resetToOriginal}
+                  >
+                    <Ionicons name="refresh" size={18} color="#64748b" />
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.editToolbarButton,
+                      styles.editToolbarPrimaryOutline,
+                    ]}
+                    onPress={saveAndExitEditMode}
+                  >
+                    <Text style={styles.editToolbarPrimaryOutlineText}>
+                      완료
+                    </Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.editToolbarText}>
+                  <Text style={styles.editToolbarTitle}>추천 코스 요약</Text>
+                  <Text style={styles.editToolbarSubtitle}>
+                    {dayKeys.length}일 · 오늘 {timeline.length}개 코스
+                  </Text>
+                </View>
+                <View style={styles.editToolbarActions}>
+                  <Pressable
+                    style={[
+                      styles.editToolbarButton,
+                      styles.editToolbarPrimaryOutline,
+                    ]}
+                    onPress={enterEditMode}
+                  >
+                    <Text style={styles.editToolbarPrimaryOutlineText}>
+                      코스 편집
+                    </Text>
+                  </Pressable>
+                </View>
               </>
             )}
           </View>
-        </View>
-
-        {/* 편집/보기 공통 툴바 */}
-        <View style={styles.editToolbar}>
-          {isEditMode ? (
-            <>
-              <View style={styles.editToolbarActions}>
-                <Pressable style={styles.editToolbarButton} onPress={cancelEditMode}>
-                  <Text style={styles.editToolbarButtonText}>취소</Text>
-                </Pressable>
-                {selectedSpots.size > 0 && (
-                  <Pressable
-                    style={[styles.editToolbarButton, styles.editToolbarPrimaryButton]}
-                    onPress={requestAlternatives}
-                    disabled={isLoadingAlternatives}
-                  >
-                    <Text style={styles.editToolbarPrimaryText}>
-                      {isLoadingAlternatives ? '추천 중...' : `대체 추천 (${selectedSpots.size})`}
-                    </Text>
-                  </Pressable>
-                )}
-                <Pressable style={styles.editToolbarIconButton} onPress={resetToOriginal}>
-                  <Ionicons name="refresh" size={18} color="#64748b" />
-                </Pressable>
-                <Pressable
-                  style={[styles.editToolbarButton, styles.editToolbarPrimaryOutline]}
-                  onPress={saveAndExitEditMode}
-                >
-                  <Text style={styles.editToolbarPrimaryOutlineText}>완료</Text>
-                </Pressable>
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={styles.editToolbarText}>
-                <Text style={styles.editToolbarTitle}>추천 코스 요약</Text>
-                <Text style={styles.editToolbarSubtitle}>
-                  {dayKeys.length}일 · 오늘 {timeline.length}개 코스
-                </Text>
-              </View>
-              <View style={styles.editToolbarActions}>
-                <Pressable
-                  style={[styles.editToolbarButton, styles.editToolbarPrimaryOutline]}
-                  onPress={enterEditMode}
-                >
-                  <Text style={styles.editToolbarPrimaryOutlineText}>코스 편집</Text>
-                </Pressable>
-              </View>
-            </>
-          )}
-        </View>
 
           {/* 일차 탭 */}
           <View style={styles.dayTabsContainer}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dayTabsScroll}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.dayTabsScroll}
+            >
               {dayKeys.map((day, idx) => {
                 const dateInfo = formatDate(planData.summary.start_date, idx);
                 const isActive = activeDay === day;
@@ -1418,10 +1785,20 @@ export default function ResultsScreen() {
                     style={[styles.dayTab, isActive && styles.dayTabActive]}
                     onPress={() => setActiveDay(day)}
                   >
-                    <Text style={[styles.dayTabLabel, isActive && styles.dayTabLabelActive]}>
+                    <Text
+                      style={[
+                        styles.dayTabLabel,
+                        isActive && styles.dayTabLabelActive,
+                      ]}
+                    >
                       Day {idx + 1}
                     </Text>
-                    <Text style={[styles.dayTabDate, isActive && styles.dayTabDateActive]}>
+                    <Text
+                      style={[
+                        styles.dayTabDate,
+                        isActive && styles.dayTabDateActive,
+                      ]}
+                    >
                       {dateInfo.short}
                     </Text>
                   </Pressable>
@@ -1434,7 +1811,9 @@ export default function ResultsScreen() {
           <View style={styles.dateHeader}>
             <Text style={styles.dateHeaderText}>{currentDateInfo.full}</Text>
             <View style={styles.dateHeaderBadge}>
-              <Text style={styles.dateHeaderBadgeText}>{timeline.length}개 장소</Text>
+              <Text style={styles.dateHeaderBadgeText}>
+                {timeline.length}개 장소
+              </Text>
             </View>
           </View>
 
@@ -1448,10 +1827,18 @@ export default function ResultsScreen() {
               items={timeline.map((_, idx) => `place-${idx}`)}
               strategy={verticalListSortingStrategy}
             >
-              <ScrollView style={styles.timelineScroll} showsVerticalScrollIndicator={false}>
+              <ScrollView
+                style={styles.timelineScroll}
+                showsVerticalScrollIndicator={false}
+              >
                 <View style={styles.timelineContainer}>
                   {timeline.map((item, idx) => {
-                    const travelInfo = (idx > 0 || (item.transit_to_here?.length > 0 && item.category !== '고정일정')) ? extractTravelInfo(item.transit_to_here) : null;
+                    const travelInfo =
+                      idx > 0 ||
+                      (item.transit_to_here?.length > 0 &&
+                        item.category !== "고정일정")
+                        ? extractTravelInfo(item.transit_to_here)
+                        : null;
                     const isHovered = hoveredItem === idx;
                     const isTransitExpanded = expandedTransit === idx;
 
@@ -1461,7 +1848,9 @@ export default function ResultsScreen() {
                         {travelInfo && !isEditMode && (
                           <Pressable
                             style={styles.travelSection}
-                            onPress={() => setExpandedTransit(isTransitExpanded ? null : idx)}
+                            onPress={() =>
+                              setExpandedTransit(isTransitExpanded ? null : idx)
+                            }
                           >
                             <View style={styles.travelLine}>
                               <View style={styles.travelDot} />
@@ -1472,24 +1861,37 @@ export default function ResultsScreen() {
                               <View style={styles.travelBadge}>
                                 <Ionicons
                                   name={
-                                    travelInfo.mode === 'walk' ? 'walk' :
-                                    travelInfo.mode === 'wait' ? 'time' :
-                                    travelInfo.mode === 'car' ? 'car' :
-                                    travelInfo.mode === 'transit' ? 'bus' : 'bus'
+                                    travelInfo.mode === "walk"
+                                      ? "walk"
+                                      : travelInfo.mode === "wait"
+                                        ? "time"
+                                        : travelInfo.mode === "car"
+                                          ? "car"
+                                          : travelInfo.mode === "transit"
+                                            ? "bus"
+                                            : "bus"
                                   }
                                   size={14}
                                   color="#6366f1"
                                 />
                                 {travelInfo.distance && (
-                                  <Text style={styles.travelDistance}>{travelInfo.distance}</Text>
+                                  <Text style={styles.travelDistance}>
+                                    {travelInfo.distance}
+                                  </Text>
                                 )}
                                 {travelInfo.duration && (
-                                  <Text style={styles.travelDuration}>{travelInfo.duration}</Text>
+                                  <Text style={styles.travelDuration}>
+                                    {travelInfo.duration}
+                                  </Text>
                                 )}
                               </View>
                               {item.transit_to_here.length > 0 && (
                                 <Ionicons
-                                  name={isTransitExpanded ? 'chevron-up' : 'chevron-down'}
+                                  name={
+                                    isTransitExpanded
+                                      ? "chevron-up"
+                                      : "chevron-down"
+                                  }
                                   size={16}
                                   color="#94a3b8"
                                 />
@@ -1499,127 +1901,247 @@ export default function ResultsScreen() {
                         )}
 
                         {/* 이동 상세 (펼침) - 새 디자인 */}
-                        {isTransitExpanded && item.transit_to_here.length > 0 && !isEditMode && (
-                          <View style={styles.transitCard}>
-                            {/* 헤더: 총 소요시간 */}
-                            <View style={styles.transitCardHeader}>
-                              <View style={styles.transitCardHeaderLeft}>
-                                <Ionicons name="swap-vertical" size={16} color="#6366f1" />
-                                <Text style={styles.transitCardHeaderText}>이동 경로</Text>
+                        {isTransitExpanded &&
+                          item.transit_to_here.length > 0 &&
+                          !isEditMode && (
+                            <View style={styles.transitCard}>
+                              {/* 헤더: 총 소요시간 */}
+                              <View style={styles.transitCardHeader}>
+                                <View style={styles.transitCardHeaderLeft}>
+                                  <Ionicons
+                                    name="swap-vertical"
+                                    size={16}
+                                    color="#6366f1"
+                                  />
+                                  <Text style={styles.transitCardHeaderText}>
+                                    이동 경로
+                                  </Text>
+                                </View>
+                                <View style={styles.transitCardHeaderRight}>
+                                  <Text style={styles.transitCardTotalTime}>
+                                    총{" "}
+                                    {calculateTotalTransitTime(
+                                      item.transit_to_here,
+                                    )}
+                                  </Text>
+                                </View>
                               </View>
-                              <View style={styles.transitCardHeaderRight}>
-                                <Text style={styles.transitCardTotalTime}>
-                                  총 {calculateTotalTransitTime(item.transit_to_here)}
-                                </Text>
-                              </View>
-                            </View>
 
-                            {/* 타임라인 */}
-                            <View style={styles.transitTimeline}>
-                              {item.transit_to_here.map((t, i) => {
-                                const step = parseTransitStep(t);
-                                const isLast = i === item.transit_to_here.length - 1;
+                              {/* 타임라인 */}
+                              <View style={styles.transitTimeline}>
+                                {item.transit_to_here.map((t, i) => {
+                                  const step = parseTransitStep(t);
+                                  const isLast =
+                                    i === item.transit_to_here.length - 1;
 
-                                // 아이콘 설정
-                                let iconName: keyof typeof Ionicons.glyphMap = 'ellipse';
-                                let iconBg = '#e5e7eb';
-                                let iconColor = '#64748b';
-                                let accentColor = '#64748b';
+                                  // 아이콘 설정
+                                  let iconName: keyof typeof Ionicons.glyphMap =
+                                    "ellipse";
+                                  let iconBg = "#e5e7eb";
+                                  let iconColor = "#64748b";
+                                  let accentColor = "#64748b";
 
-                                if (step.type === 'walk') {
-                                  iconName = 'walk';
-                                  iconBg = '#dbeafe';
-                                  iconColor = '#2563eb';
-                                  accentColor = '#2563eb';
-                                } else if (step.type === 'bus') {
-                                  iconName = 'bus';
-                                  iconBg = '#fef3c7';
-                                  iconColor = '#d97706';
-                                  accentColor = '#d97706';
-                                } else if (step.type === 'subway') {
-                                  iconName = 'subway';
-                                  iconBg = '#d1fae5';
-                                  iconColor = '#059669';
-                                  accentColor = '#059669';
-                                } else if (step.type === 'wait') {
-                                  iconName = 'time';
-                                  iconBg = '#ede9fe';
-                                  iconColor = '#7c3aed';
-                                  accentColor = '#7c3aed';
-                                } else if (step.type === 'car') {
-                                  iconName = 'car';
-                                  iconBg = '#fce7f3';
-                                  iconColor = '#be185d';
-                                  accentColor = '#be185d';
-                                }
+                                  if (step.type === "walk") {
+                                    iconName = "walk";
+                                    iconBg = "#dbeafe";
+                                    iconColor = "#2563eb";
+                                    accentColor = "#2563eb";
+                                  } else if (step.type === "bus") {
+                                    iconName = "bus";
+                                    iconBg = "#fef3c7";
+                                    iconColor = "#d97706";
+                                    accentColor = "#d97706";
+                                  } else if (step.type === "subway") {
+                                    iconName = "subway";
+                                    iconBg = "#d1fae5";
+                                    iconColor = "#059669";
+                                    accentColor = "#059669";
+                                  } else if (step.type === "wait") {
+                                    iconName = "time";
+                                    iconBg = "#ede9fe";
+                                    iconColor = "#7c3aed";
+                                    accentColor = "#7c3aed";
+                                  } else if (step.type === "car") {
+                                    iconName = "car";
+                                    iconBg = "#fce7f3";
+                                    iconColor = "#be185d";
+                                    accentColor = "#be185d";
+                                  }
 
-                                return (
-                                  <View key={i} style={styles.transitStep}>
-                                    {/* 타임라인 좌측 (점 + 선) */}
-                                    <View style={styles.transitStepLeft}>
-                                      <View style={[styles.transitStepDot, { backgroundColor: iconBg, borderColor: accentColor }]}>
-                                        <Ionicons name={iconName} size={14} color={iconColor} />
-                                      </View>
-                                      {!isLast && <View style={[styles.transitStepLine, { backgroundColor: accentColor + '40' }]} />}
-                                    </View>
-
-                                    {/* 타임라인 우측 (정보) */}
-                                    <View style={styles.transitStepRight}>
-                                      <View style={styles.transitStepHeader}>
-                                        <Text style={[styles.transitStepType, { color: accentColor }]}>
-                                          {step.type === 'walk' ? '도보' :
-                                           step.type === 'bus' ? '버스' :
-                                           step.type === 'subway' ? '지하철' :
-                                           step.type === 'wait' ? (step.rawText.includes('여유') ? '출발 전 여유' : step.rawText.includes('현장') ? '현장 대기' : '대기') :
-                                           step.type === 'car' ? '승용차' : '이동'}
-                                        </Text>
-                                        {step.duration && (
-                                          <Text style={styles.transitStepDuration}>{step.duration}</Text>
+                                  return (
+                                    <View key={i} style={styles.transitStep}>
+                                      {/* 타임라인 좌측 (점 + 선) */}
+                                      <View style={styles.transitStepLeft}>
+                                        <View
+                                          style={[
+                                            styles.transitStepDot,
+                                            {
+                                              backgroundColor: iconBg,
+                                              borderColor: accentColor,
+                                            },
+                                          ]}
+                                        >
+                                          <Ionicons
+                                            name={iconName}
+                                            size={14}
+                                            color={iconColor}
+                                          />
+                                        </View>
+                                        {!isLast && (
+                                          <View
+                                            style={[
+                                              styles.transitStepLine,
+                                              {
+                                                backgroundColor:
+                                                  accentColor + "40",
+                                              },
+                                            ]}
+                                          />
                                         )}
-                                        {step.delayText && step.delayColor && (
-                                          <View style={[styles.transitDelayBadge, { backgroundColor: step.delayColor + '20', borderColor: step.delayColor }]}>
-                                            <Ionicons name="warning" size={10} color={step.delayColor} />
-                                            <Text style={[styles.transitDelayText, { color: step.delayColor }]}>
-                                              {step.delayText}
+                                      </View>
+
+                                      {/* 타임라인 우측 (정보) */}
+                                      <View style={styles.transitStepRight}>
+                                        <View style={styles.transitStepHeader}>
+                                          <Text
+                                            style={[
+                                              styles.transitStepType,
+                                              { color: accentColor },
+                                            ]}
+                                          >
+                                            {step.type === "walk"
+                                              ? "도보"
+                                              : step.type === "bus"
+                                                ? "버스"
+                                                : step.type === "subway"
+                                                  ? "지하철"
+                                                  : step.type === "wait"
+                                                    ? step.rawText.includes(
+                                                        "여유",
+                                                      )
+                                                      ? "출발 전 여유"
+                                                      : step.rawText.includes(
+                                                            "현장",
+                                                          )
+                                                        ? "현장 대기"
+                                                        : "대기"
+                                                    : step.type === "car"
+                                                      ? "승용차"
+                                                      : "이동"}
+                                          </Text>
+                                          {step.duration && (
+                                            <Text
+                                              style={styles.transitStepDuration}
+                                            >
+                                              {step.duration}
                                             </Text>
+                                          )}
+                                          {step.delayText &&
+                                            step.delayColor && (
+                                              <View
+                                                style={[
+                                                  styles.transitDelayBadge,
+                                                  {
+                                                    backgroundColor:
+                                                      step.delayColor + "20",
+                                                    borderColor:
+                                                      step.delayColor,
+                                                  },
+                                                ]}
+                                              >
+                                                <Ionicons
+                                                  name="warning"
+                                                  size={10}
+                                                  color={step.delayColor}
+                                                />
+                                                <Text
+                                                  style={[
+                                                    styles.transitDelayText,
+                                                    { color: step.delayColor },
+                                                  ]}
+                                                >
+                                                  {step.delayText}
+                                                </Text>
+                                              </View>
+                                            )}
+                                        </View>
+
+                                        {/* 버스/지하철 노선 정보 */}
+                                        {step.routes.length > 0 && (
+                                          <View style={styles.transitRoutes}>
+                                            {step.routes.map((route, ri) => (
+                                              <View
+                                                key={ri}
+                                                style={[
+                                                  styles.transitRouteBadge,
+                                                  {
+                                                    backgroundColor:
+                                                      step.type === "subway"
+                                                        ? "#d1fae5"
+                                                        : "#fef3c7",
+                                                  },
+                                                ]}
+                                              >
+                                                <Text
+                                                  style={[
+                                                    styles.transitRouteText,
+                                                    {
+                                                      color:
+                                                        step.type === "subway"
+                                                          ? "#059669"
+                                                          : "#d97706",
+                                                    },
+                                                  ]}
+                                                >
+                                                  {route}
+                                                </Text>
+                                              </View>
+                                            ))}
+                                          </View>
+                                        )}
+
+                                        {/* 정류장 정보 */}
+                                        {(step.fromStation ||
+                                          step.toStation) && (
+                                          <View style={styles.transitStations}>
+                                            {step.fromStation && (
+                                              <Text
+                                                style={
+                                                  styles.transitStationText
+                                                }
+                                              >
+                                                {step.fromStation}
+                                              </Text>
+                                            )}
+                                            {step.fromStation &&
+                                              step.toStation && (
+                                                <Ionicons
+                                                  name="arrow-forward"
+                                                  size={12}
+                                                  color="#94a3b8"
+                                                  style={{
+                                                    marginHorizontal: 6,
+                                                  }}
+                                                />
+                                              )}
+                                            {step.toStation && (
+                                              <Text
+                                                style={
+                                                  styles.transitStationText
+                                                }
+                                              >
+                                                {step.toStation}
+                                              </Text>
+                                            )}
                                           </View>
                                         )}
                                       </View>
-
-                                      {/* 버스/지하철 노선 정보 */}
-                                      {step.routes.length > 0 && (
-                                        <View style={styles.transitRoutes}>
-                                          {step.routes.map((route, ri) => (
-                                            <View key={ri} style={[styles.transitRouteBadge, { backgroundColor: step.type === 'subway' ? '#d1fae5' : '#fef3c7' }]}>
-                                              <Text style={[styles.transitRouteText, { color: step.type === 'subway' ? '#059669' : '#d97706' }]}>
-                                                {route}
-                                              </Text>
-                                            </View>
-                                          ))}
-                                        </View>
-                                      )}
-
-                                      {/* 정류장 정보 */}
-                                      {(step.fromStation || step.toStation) && (
-                                        <View style={styles.transitStations}>
-                                          {step.fromStation && (
-                                            <Text style={styles.transitStationText}>{step.fromStation}</Text>
-                                          )}
-                                          {step.fromStation && step.toStation && (
-                                            <Ionicons name="arrow-forward" size={12} color="#94a3b8" style={{ marginHorizontal: 6 }} />
-                                          )}
-                                          {step.toStation && (
-                                            <Text style={styles.transitStationText}>{step.toStation}</Text>
-                                          )}
-                                        </View>
-                                      )}
                                     </View>
-                                  </View>
-                                );
-                              })}
+                                  );
+                                })}
+                              </View>
                             </View>
-                          </View>
-                        )}
+                          )}
 
                         {/* 장소 카드 */}
                         <SortablePlaceCard
@@ -1643,12 +2165,18 @@ export default function ResultsScreen() {
                 {/* 여행 요약 */}
                 <View style={styles.tripSummary}>
                   <View style={styles.summaryCard}>
-                    <Ionicons name="information-circle" size={20} color="#6366f1" />
+                    <Ionicons
+                      name="information-circle"
+                      size={20}
+                      color="#6366f1"
+                    />
                     <View style={styles.summaryContent}>
                       <Text style={styles.summaryTitle}>여행 정보</Text>
                       <Text style={styles.summaryText}>
-                        {planData.summary.transport_mode === 'walkAndPublic' ? '도보 + 대중교통' : '자가용'} 이용 ·
-                        총 {timeline.length}개 장소 방문
+                        {planData.summary.transport_mode === "walkAndPublic"
+                          ? "도보 + 대중교통"
+                          : "자가용"}{" "}
+                        이용 · 총 {timeline.length}개 장소 방문
                       </Text>
                     </View>
                   </View>
@@ -1660,10 +2188,10 @@ export default function ResultsScreen() {
 
         {/* 오른쪽: 지도 */}
         <View style={styles.rightPanel}>
-          {Platform.OS === 'web' && typeof window !== 'undefined' && (
+          {Platform.OS === "web" && typeof window !== "undefined" && (
             <div
               ref={mapContainerRef}
-              style={{ width: '100%', height: '100%' }}
+              style={{ width: "100%", height: "100%" }}
             />
           )}
         </View>
@@ -1673,15 +2201,15 @@ export default function ResultsScreen() {
       {alternativesModalVisible && (
         <div
           style={{
-            position: 'fixed',
+            position: "fixed",
             top: 0,
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center",
             zIndex: 1000,
           }}
           onClick={(e) => {
@@ -1692,13 +2220,13 @@ export default function ResultsScreen() {
         >
           <div
             style={{
-              backgroundColor: '#ffffff',
+              backgroundColor: "#ffffff",
               borderTopLeftRadius: 20,
               borderTopRightRadius: 20,
-              width: '100%',
-              maxHeight: '80%',
+              width: "100%",
+              maxHeight: "80%",
               paddingBottom: 40,
-              overflow: 'hidden',
+              overflow: "hidden",
             }}
           >
             <View style={styles.modalHeader}>
@@ -1707,7 +2235,7 @@ export default function ResultsScreen() {
                 <Ionicons name="close" size={24} color="#64748b" />
               </Pressable>
             </View>
-            
+
             <Text style={styles.modalSubtitle}>
               선택한 {selectedSpots.size}개 장소의 대체 장소를 추천합니다.
             </Text>
@@ -1718,7 +2246,9 @@ export default function ResultsScreen() {
                   <Text style={styles.replacementLabel}>{spotName} →</Text>
                   {alternatives
                     .filter((alt) => {
-                      const originalSpot = timeline.find((item) => item.name === spotName);
+                      const originalSpot = timeline.find(
+                        (item) => item.name === spotName,
+                      );
                       return originalSpot?.category === alt.category;
                     })
                     .slice(0, 3)
@@ -1726,27 +2256,68 @@ export default function ResultsScreen() {
                       <Pressable
                         key={altIdx}
                         style={styles.alternativeCard}
-                        onPress={() => replaceSpotWithAlternative(spotName, alt)}
+                        onPress={() =>
+                          replaceSpotWithAlternative(spotName, alt)
+                        }
                       >
                         <View style={styles.alternativeCardContent}>
-                          <View style={[styles.alternativeMarker, { backgroundColor: getCategoryColor(alt.category).accent }]}>
-                            <Text style={styles.alternativeMarkerText}>{altIdx + 1}</Text>
+                          <View
+                            style={[
+                              styles.alternativeMarker,
+                              {
+                                backgroundColor: getCategoryColor(alt.category)
+                                  .accent,
+                              },
+                            ]}
+                          >
+                            <Text style={styles.alternativeMarkerText}>
+                              {altIdx + 1}
+                            </Text>
                           </View>
                           <View style={styles.alternativeInfo}>
-                            <Text style={styles.alternativeName}>{alt.name}</Text>
+                            <Text style={styles.alternativeName}>
+                              {alt.name}
+                            </Text>
                             <View style={styles.alternativeMeta}>
-                              <View style={[styles.categoryBadge, { backgroundColor: getCategoryColor(alt.category).bg }]}>
-                                <Ionicons name={getCategoryIcon(alt.category) as any} size={12} color={getCategoryColor(alt.category).text} />
-                                <Text style={[styles.categoryText, { color: getCategoryColor(alt.category).text }]}>
+                              <View
+                                style={[
+                                  styles.categoryBadge,
+                                  {
+                                    backgroundColor: getCategoryColor(
+                                      alt.category,
+                                    ).bg,
+                                  },
+                                ]}
+                              >
+                                <Ionicons
+                                  name={getCategoryIcon(alt.category) as any}
+                                  size={12}
+                                  color={getCategoryColor(alt.category).text}
+                                />
+                                <Text
+                                  style={[
+                                    styles.categoryText,
+                                    {
+                                      color: getCategoryColor(alt.category)
+                                        .text,
+                                    },
+                                  ]}
+                                >
                                   {alt.category}
                                 </Text>
                               </View>
                               {alt.reason && (
-                                <Text style={styles.alternativeReason}>{alt.reason}</Text>
+                                <Text style={styles.alternativeReason}>
+                                  {alt.reason}
+                                </Text>
                               )}
                             </View>
                           </View>
-                          <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
+                          <Ionicons
+                            name="chevron-forward"
+                            size={20}
+                            color="#cbd5e1"
+                          />
                         </View>
                       </Pressable>
                     ))}
@@ -1763,36 +2334,36 @@ export default function ResultsScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
   },
   mainContainer: {
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: "row",
   },
   // 왼쪽 패널
   leftPanel: {
     width: 435,
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
     borderRightWidth: 1,
-    borderRightColor: '#e2e8f0',
+    borderRightColor: "#e2e8f0",
     flexShrink: 0,
   },
   // 헤더
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: "#f1f5f9",
   },
   backButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#f8fafc",
+    alignItems: "center",
+    justifyContent: "center",
   },
   headerInfo: {
     flex: 1,
@@ -1800,28 +2371,28 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#0f172a',
+    fontWeight: "700",
+    color: "#0f172a",
   },
   headerSubtitle: {
     fontSize: 13,
-    color: '#64748b',
+    color: "#64748b",
     marginTop: 2,
   },
   headerActions: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 8,
   },
   headerActionBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#f8fafc",
+    alignItems: "center",
+    justifyContent: "center",
   },
   headerActionBtnActive: {
-    backgroundColor: '#eef2ff',
+    backgroundColor: "#eef2ff",
   },
   headerActionBtnDisabled: {
     opacity: 0.5,
@@ -1830,20 +2401,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: '#f8fafc',
+    backgroundColor: "#f8fafc",
   },
   headerTextBtnLabel: {
     fontSize: 14,
-    fontWeight: '500',
-    color: '#64748b',
+    fontWeight: "500",
+    color: "#64748b",
   },
   headerTextBtnPrimary: {
-    backgroundColor: '#6366f1',
+    backgroundColor: "#6366f1",
   },
   headerTextBtnLabelPrimary: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#ffffff',
+    fontWeight: "600",
+    color: "#ffffff",
   },
   editToolbar: {
     marginHorizontal: 16,
@@ -1852,12 +2423,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: '#eef2ff',
+    backgroundColor: "#eef2ff",
     borderWidth: 1,
-    borderColor: '#e0e7ff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
+    borderColor: "#e0e7ff",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
   },
   editToolbarText: {
     flex: 1,
@@ -1865,68 +2436,68 @@ const styles = StyleSheet.create({
   },
   editToolbarTitle: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#4338ca',
+    fontWeight: "600",
+    color: "#4338ca",
     marginBottom: 2,
   },
   editToolbarSubtitle: {
     fontSize: 12,
-    color: '#6366f1',
+    color: "#6366f1",
   },
   editToolbarActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   editToolbarButton: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: '#e5e7eb',
+    backgroundColor: "#e5e7eb",
   },
   editToolbarButtonText: {
     fontSize: 12,
-    fontWeight: '500',
-    color: '#4b5563',
+    fontWeight: "500",
+    color: "#4b5563",
   },
   editToolbarPrimaryButton: {
-    backgroundColor: '#6366f1',
+    backgroundColor: "#6366f1",
   },
   editToolbarPrimaryText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#ffffff',
+    fontWeight: "600",
+    color: "#ffffff",
   },
   editToolbarIconButton: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#e5e7eb',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#e5e7eb",
+    alignItems: "center",
+    justifyContent: "center",
   },
   editToolbarPrimaryOutline: {
-    backgroundColor: '#eef2ff',
+    backgroundColor: "#eef2ff",
     borderWidth: 1,
-    borderColor: '#6366f1',
+    borderColor: "#6366f1",
   },
   editToolbarPrimaryOutlineText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#4f46e5',
+    fontWeight: "600",
+    color: "#4f46e5",
   },
   headerTextBtnRecommend: {
-    backgroundColor: '#6366f1',
+    backgroundColor: "#6366f1",
   },
   headerTextBtnLabelRecommend: {
-    color: '#ffffff',
-    fontWeight: '600',
+    color: "#ffffff",
+    fontWeight: "600",
     fontSize: 13,
   },
   // 일차 탭
   dayTabsContainer: {
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: "#f1f5f9",
   },
   dayTabsScroll: {
     paddingHorizontal: 16,
@@ -1937,53 +2508,53 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
+    backgroundColor: "#f8fafc",
+    alignItems: "center",
     minWidth: 72,
   },
   dayTabActive: {
-    backgroundColor: '#6366f1',
+    backgroundColor: "#6366f1",
   },
   dayTabLabel: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#64748b',
+    fontWeight: "600",
+    color: "#64748b",
   },
   dayTabLabelActive: {
-    color: '#ffffff',
+    color: "#ffffff",
   },
   dayTabDate: {
     fontSize: 11,
-    color: '#94a3b8',
+    color: "#94a3b8",
     marginTop: 2,
   },
   dayTabDateActive: {
-    color: 'rgba(255,255,255,0.8)',
+    color: "rgba(255,255,255,0.8)",
   },
   // 날짜 헤더
   dateHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 16,
-    backgroundColor: '#fafafa',
+    backgroundColor: "#fafafa",
   },
   dateHeaderText: {
     fontSize: 16,
-    fontWeight: '700',
-    color: '#0f172a',
+    fontWeight: "700",
+    color: "#0f172a",
   },
   dateHeaderBadge: {
-    backgroundColor: '#e0e7ff',
+    backgroundColor: "#e0e7ff",
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
   },
   dateHeaderBadgeText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#4f46e5',
+    fontWeight: "600",
+    color: "#4f46e5",
   },
   // 타임라인
   timelineScroll: {
@@ -1994,40 +2565,40 @@ const styles = StyleSheet.create({
   },
   // 이동 구간
   travelSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginLeft: 14,
     marginVertical: 4,
     paddingVertical: 8,
   },
   travelLine: {
     width: 20,
-    alignItems: 'center',
+    alignItems: "center",
     marginRight: 12,
   },
   travelDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#cbd5e1',
+    backgroundColor: "#cbd5e1",
   },
   travelLineDash: {
     flex: 1,
     width: 2,
-    backgroundColor: '#e2e8f0',
+    backgroundColor: "#e2e8f0",
     marginVertical: 4,
     minHeight: 16,
   },
   travelInfo: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   travelBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f9ff',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f0f9ff",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 16,
@@ -2035,24 +2606,24 @@ const styles = StyleSheet.create({
   },
   travelDistance: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#0369a1',
+    fontWeight: "600",
+    color: "#0369a1",
   },
   travelDuration: {
     fontSize: 12,
-    color: '#64748b',
+    color: "#64748b",
   },
   // 이동 상세
   transitDetail: {
     marginLeft: 48,
     marginBottom: 8,
     padding: 12,
-    backgroundColor: '#f8fafc',
+    backgroundColor: "#f8fafc",
     borderRadius: 12,
   },
   transitDetailRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
+    flexDirection: "row",
+    alignItems: "flex-start",
     marginBottom: 8,
     gap: 8,
   },
@@ -2060,8 +2631,8 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   transitStepTexts: {
     flex: 1,
@@ -2069,12 +2640,12 @@ const styles = StyleSheet.create({
   },
   transitMainText: {
     fontSize: 13,
-    color: '#475569',
+    color: "#475569",
   },
   transitDelayBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 999,
@@ -2082,72 +2653,72 @@ const styles = StyleSheet.create({
   },
   transitDelayText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   // 새 이동 구간 카드 스타일
   transitCard: {
     marginLeft: 24,
     marginRight: 8,
     marginBottom: 12,
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
+    borderColor: "#e2e8f0",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 2,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   transitCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#f8fafc',
+    backgroundColor: "#f8fafc",
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: "#f1f5f9",
   },
   transitCardHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   transitCardHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   transitCardHeaderText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#334155',
+    fontWeight: "600",
+    color: "#334155",
   },
   transitCardTotalTime: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#6366f1',
+    fontWeight: "700",
+    color: "#6366f1",
   },
   transitTimeline: {
     padding: 16,
   },
   transitStep: {
-    flexDirection: 'row',
+    flexDirection: "row",
     minHeight: 48,
   },
   transitStepLeft: {
     width: 36,
-    alignItems: 'center',
+    alignItems: "center",
   },
   transitStepDot: {
     width: 32,
     height: 32,
     borderRadius: 16,
     borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ffffff',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
     zIndex: 1,
   },
   transitStepLine: {
@@ -2161,26 +2732,26 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingLeft: 12,
     paddingBottom: 16,
-    justifyContent: 'center'
+    justifyContent: "center",
   },
   transitStepHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
   },
   transitStepType: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   transitStepDuration: {
     fontSize: 13,
-    fontWeight: '500',
-    color: '#64748b',
+    fontWeight: "500",
+    color: "#64748b",
   },
   transitRoutes: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 6,
     marginTop: 8,
   },
@@ -2191,119 +2762,119 @@ const styles = StyleSheet.create({
   },
   transitRouteText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   transitStations: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginTop: 6,
-    flexWrap: 'wrap',
+    flexWrap: "wrap",
   },
   transitStationText: {
     fontSize: 13,
-    color: '#64748b',
+    color: "#64748b",
   },
   // 장소 카드
   placeCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#ffffff',
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 16,
     marginBottom: 4,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
-    shadowColor: '#000',
+    borderColor: "#f1f5f9",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 3,
     elevation: 1,
   },
   placeCardHovered: {
-    borderColor: '#e0e7ff',
-    backgroundColor: '#fafbff',
+    borderColor: "#e0e7ff",
+    backgroundColor: "#fafbff",
   },
   placeCardDragging: {
-    borderColor: '#6366f1',
-    backgroundColor: '#f0f9ff',
+    borderColor: "#6366f1",
+    backgroundColor: "#f0f9ff",
     shadowOpacity: 0.15,
     shadowRadius: 8,
   },
   placeCardSelected: {
-    backgroundColor: '#eef2ff',
-    borderColor: '#6366f1',
+    backgroundColor: "#eef2ff",
+    borderColor: "#6366f1",
     borderWidth: 2,
   },
   placeCardEdit: {
     borderWidth: 1,
-    borderColor: '#e0e7ff',
-    backgroundColor: '#fafbff',
+    borderColor: "#e0e7ff",
+    backgroundColor: "#fafbff",
   },
   editCheckboxArea: {
     paddingVertical: 8,
     paddingHorizontal: 6,
     marginRight: 4,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   checkbox: {
     width: 22,
     height: 22,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: '#cbd5e1',
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderColor: "#cbd5e1",
+    backgroundColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
   },
   checkboxChecked: {
-    backgroundColor: '#6366f1',
-    borderColor: '#6366f1',
+    backgroundColor: "#6366f1",
+    borderColor: "#6366f1",
   },
   placeMarker: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 14,
   },
   placeMarkerText: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#ffffff',
+    fontWeight: "700",
+    color: "#ffffff",
   },
   placeContent: {
     flex: 1,
   },
   placeTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: 6,
   },
   placeTimeMain: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 4,
   },
   courseOrderLabel: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#64748b',
+    fontWeight: "600",
+    color: "#64748b",
   },
   placeTime: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#6366f1',
+    fontWeight: "600",
+    color: "#6366f1",
   },
   placeTimeEnd: {
     fontSize: 13,
-    color: '#94a3b8',
+    color: "#94a3b8",
   },
   placeTimeUndefined: {
     fontSize: 13,
-    color: '#94a3b8',
-    fontStyle: 'italic',
+    color: "#94a3b8",
+    fontStyle: "italic",
   },
   timeBadge: {
     paddingHorizontal: 8,
@@ -2313,12 +2884,12 @@ const styles = StyleSheet.create({
   },
   timeBadgeText: {
     fontSize: 11,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   placeName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#0f172a',
+    fontWeight: "600",
+    color: "#0f172a",
     marginBottom: 8,
   },
   placeNameEdit: {
@@ -2326,15 +2897,15 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   placeMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
     marginBottom: 8,
   },
   categoryBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -2342,16 +2913,16 @@ const styles = StyleSheet.create({
   },
   categoryText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   fixedEventLocationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 4,
   },
   fixedEventLocationText: {
     fontSize: 12,
-    color: '#6366f1',
+    color: "#6366f1",
     flex: 1,
   },
   fixedEventTagsContainer: {
@@ -2360,49 +2931,49 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   fixedEventLocationTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f1f5f9',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f1f5f9",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
     gap: 6,
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
   },
   fixedEventLocationTagText: {
     fontSize: 12,
-    color: '#475569',
-    fontWeight: '500',
+    color: "#475569",
+    fontWeight: "500",
   },
   fixedEventTypeTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f1f5f9',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f1f5f9",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
     gap: 6,
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
   },
   fixedEventTypeDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#64748b',
+    backgroundColor: "#64748b",
   },
   fixedEventTypeText: {
     fontSize: 12,
-    color: '#475569',
-    fontWeight: '500',
+    color: "#475569",
+    fontWeight: "500",
   },
   statusRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 6,
   },
   statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -2415,15 +2986,15 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 11,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   detailButton: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#f8fafc",
+    alignItems: "center",
+    justifyContent: "center",
     marginLeft: 8,
   },
   // 여행 요약
@@ -2432,9 +3003,9 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   summaryCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#f0f9ff',
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#f0f9ff",
     borderRadius: 12,
     padding: 14,
     gap: 12,
@@ -2444,81 +3015,81 @@ const styles = StyleSheet.create({
   },
   summaryTitle: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#0369a1',
+    fontWeight: "600",
+    color: "#0369a1",
     marginBottom: 4,
   },
   summaryText: {
     fontSize: 12,
-    color: '#64748b',
+    color: "#64748b",
     lineHeight: 18,
   },
   // 오른쪽 지도 패널
   rightPanel: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: "#f8fafc",
   },
   // 빈 상태
   emptyContainer: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: "#f8fafc",
   },
   emptyContent: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     padding: 32,
   },
   emptyIconWrap: {
     width: 96,
     height: 96,
     borderRadius: 48,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#f1f5f9",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 24,
   },
   emptyTitle: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#0f172a',
+    fontWeight: "700",
+    color: "#0f172a",
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 14,
-    color: '#64748b',
-    textAlign: 'center',
+    color: "#64748b",
+    textAlign: "center",
     lineHeight: 22,
     marginBottom: 24,
   },
   emptyButton: {
-    backgroundColor: '#6366f1',
+    backgroundColor: "#6366f1",
     paddingHorizontal: 24,
     paddingVertical: 14,
     borderRadius: 12,
   },
   emptyButtonText: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#ffffff',
+    fontWeight: "600",
+    color: "#ffffff",
   },
   // 대체 장소 모달
   modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: "#f1f5f9",
   },
   modalTitle: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#0f172a',
+    fontWeight: "700",
+    color: "#0f172a",
   },
   modalSubtitle: {
     fontSize: 14,
-    color: '#64748b',
+    color: "#64748b",
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 16,
@@ -2533,51 +3104,51 @@ const styles = StyleSheet.create({
   },
   replacementLabel: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#0f172a',
+    fontWeight: "600",
+    color: "#0f172a",
     marginBottom: 12,
   },
   alternativeCard: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: "#f8fafc",
     borderRadius: 12,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: "#e2e8f0",
   },
   alternativeCardContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     padding: 12,
   },
   alternativeMarker: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 12,
   },
   alternativeMarkerText: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#ffffff',
+    fontWeight: "700",
+    color: "#ffffff",
   },
   alternativeInfo: {
     flex: 1,
   },
   alternativeName: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#0f172a',
+    fontWeight: "600",
+    color: "#0f172a",
     marginBottom: 6,
   },
   alternativeMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   alternativeReason: {
     fontSize: 12,
-    color: '#64748b',
+    color: "#64748b",
   },
 });
