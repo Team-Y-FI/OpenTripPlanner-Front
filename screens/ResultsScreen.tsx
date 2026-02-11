@@ -63,9 +63,11 @@ interface RouteItem {
   lat: number;
   lng: number;
   addr: string;
-  type: string; // 추가
-  stay: number; // 추가
-  window?: number[] | null; // 추가
+  // ▼ 백엔드 재계산(엔진) 연동을 위해 추가되는 필수 메타데이터 ▼
+  type: string; // "spot", "lunch", "dinner", "fixed" 등 장소의 성격
+  stay: number; // 해당 장소에서의 체류 시간 (분 단위)
+  window?: number[] | null; // 방문 허용 시간대 (예: [660, 840])
+  orig_time_str?: string | null; // 고정 일정의 원래 시간 문자열 (예: "14:00 - 15:00")
 }
 
 interface DayPlan {
@@ -954,6 +956,7 @@ export default function ResultsScreen() {
           type: (origin as any)?.type || "spot",
           stay: (origin as any)?.stay || 60,
           window: (origin as any)?.window || null,
+          orig_time_str: (origin as any)?.orig_time_str || null, // 엔진 타임라인 복원용 추가
         };
       });
 
