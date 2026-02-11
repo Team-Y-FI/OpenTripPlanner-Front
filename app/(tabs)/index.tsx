@@ -339,7 +339,7 @@ export default function HomeScreen() {
                 {isCourseGenerating
                   ? '생성 중...'
                   : generatedPlan
-                    ? '최근 생성'
+                    ? '마지막으로 본 플랜'
                     : recentPlan
                       ? '저장된 플랜'
                       : '플랜 생성 대기'
