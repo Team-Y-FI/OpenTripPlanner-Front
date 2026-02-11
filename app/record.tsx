@@ -6,6 +6,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { API_URL, recordService, type SpotDetail } from '@/services';
+import SpotMap from '@/components/SpotMap';
 
 const { width } = Dimensions.get('window');
 const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
@@ -207,6 +208,19 @@ export default function RecordScreen() {
               <Text style={styles.memoText}>{spot.memo || '메모가 없습니다.'}</Text>
             )}
           </View>
+
+          {/* 위치 지도 */}
+          {spot.place.lat && spot.place.lng && (
+            <View style={styles.section}>
+              <Text style={styles.cardTitle}>위치</Text>
+              <SpotMap
+                lat={spot.place.lat}
+                lng={spot.place.lng}
+                name={spot.place.name}
+                address={spot.place.address || undefined}
+              />
+            </View>
+          )}
 
           {/* 관련 플랜 */}
           <View style={styles.section}>
