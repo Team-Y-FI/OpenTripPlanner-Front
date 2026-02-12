@@ -1,16 +1,17 @@
 ﻿import { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { api, metaService, recordService, API_URL } from '@/services';
+import { api, metaService, recordService, utilsService, API_URL } from '@/services';
 import Toast from 'react-native-toast-message';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
 import FullScreenLoader from '@/components/FullScreenLoader';
+import PlacePickerMap from '@/components/PlacePickerMap';
 
 const { width } = Dimensions.get('window');
 
@@ -60,6 +61,8 @@ type UploadMeta = {
   taken_at?: string | null;
 };
 
+type VisitType = 'visited' | 'planned';
+
 const MAX_IMAGE_DIMENSION = 1600;
 const JPEG_COMPRESS_QUALITY = 0.75;
 
@@ -70,6 +73,47 @@ const DEFAULT_LIMITS: UploadLimits = {
 };
 
 const DEFAULT_PLACE_CATEGORIES = ["카페", "맛집", "전시", "공원", "야경", "쇼핑"];
+
+const webDateInputBaseStyle: any = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  backgroundColor: '#f8fafc',
+  border: '1px solid #e2e8f0',
+  borderRadius: 14,
+  padding: '12px 14px',
+  fontSize: 14,
+  color: '#0f172a',
+};
+
+function WebDateInput({
+  value,
+  onChange,
+  disabled,
+  hasError,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  hasError?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type="date"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      placeholder={placeholder}
+      style={{
+        ...webDateInputBaseStyle,
+        ...(hasError ? { border: '2px solid #ef4444' } : {}),
+      }}
+    />
+  );
+}
 interface PhotoData {
   photo_id: string;
   file_name: string;
@@ -78,6 +122,8 @@ interface PhotoData {
   place: PlaceData | null;
   thumbnail_url: string | null;
   memo?: string | null;
+  visit_type?: VisitType;
+  visit_date?: string | null;
   editingPlace?: boolean; // 장소 수정 중인지 여부
 }
 
@@ -282,6 +328,25 @@ const prepareUploadAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<
   }
 };
 
+const formatDateInput = (value?: string | null) => {
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return '';
+  }
+};
+
+const toIsoDate = (value: string) => {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return null;
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+};
+
 export default function UploadScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -292,6 +357,12 @@ export default function UploadScreen() {
   const [placeAddress, setPlaceAddress] = useState('');
   const [placeCategory, setPlaceCategory] = useState('');
   const [placeMemo, setPlaceMemo] = useState('');
+  const [placeLat, setPlaceLat] = useState<number | null>(null);
+  const [placeLng, setPlaceLng] = useState<number | null>(null);
+  const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
+  const [isReverseGeocoding, setIsReverseGeocoding] = useState(false);
+  const [visitType, setVisitType] = useState<VisitType>('visited');
+  const [visitDateInput, setVisitDateInput] = useState('');
   const [photos, setPhotos] = useState<PhotoData[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -462,6 +533,8 @@ export default function UploadScreen() {
       const newPhotos: PhotoData[] = response.photos.map((photo) => ({
         ...photo,
         thumbnail_url: resolveStorageUrl(photo.thumbnail_url),
+        visit_type: 'visited',
+        visit_date: photo.exif?.taken_at ?? null,
       }));
 
       setUploadId(response.upload_id);
@@ -504,12 +577,28 @@ export default function UploadScreen() {
       return;
     }
 
-    const nowIso = new Date().toISOString();
+    const missingVisitDate = photos.some(
+      (p) => !p.exif?.taken_at && p.visit_type !== 'planned' && !p.visit_date
+    );
+    if (missingVisitDate) {
+      Toast.show({
+        type: 'error',
+        text1: '방문 날짜 필요',
+        text2: '방문한 사진의 날짜를 입력해주세요.',
+      });
+      return;
+    }
+
     const spots = photos.map((photo) => {
       const memo = photo.memo?.trim();
+      const visitedAt = photo.exif?.taken_at
+        ? photo.exif.taken_at
+        : photo.visit_type === 'planned'
+          ? null
+          : photo.visit_date || null;
       return {
         photo_id: photo.photo_id,
-        visited_at: photo.exif?.taken_at || nowIso,
+        visited_at: visitedAt,
         place: {
           name: photo.place!.name,
           address: photo.place!.address || null,
@@ -559,7 +648,23 @@ export default function UploadScreen() {
       setPlaceAddress(photo.place?.address || '');
       setPlaceCategory(photo.place?.category || '');
       setPlaceMemo(photo.memo || '');
+      setPlaceLat(photo.place?.lat ?? photo.exif?.lat ?? null);
+      setPlaceLng(photo.place?.lng ?? photo.exif?.lng ?? null);
+      setIsGeocodingAddress(false);
+      setIsReverseGeocoding(false);
+      const defaultVisitType: VisitType = photo.visit_type ?? 'visited';
+      setVisitType(defaultVisitType);
+      const initialVisitDate =
+        defaultVisitType === 'planned' ? null : photo.visit_date || photo.exif?.taken_at || null;
+      setVisitDateInput(formatDateInput(initialVisitDate));
       setModalVisible(true);
+    }
+  };
+
+  const handleVisitTypeChange = (next: VisitType) => {
+    setVisitType(next);
+    if (next === 'planned') {
+      setVisitDateInput('');
     }
   };
 
@@ -569,9 +674,31 @@ export default function UploadScreen() {
     }
 
     const target = photos.find((p) => p.photo_id === editingPhotoId);
-    const lat = target?.exif?.lat ?? null;
-    const lng = target?.exif?.lng ?? null;
-    const memoValue = placeMemo.trim();
+    if (!target) return;
+    const allowMemo = !!target?.exif;
+    const lat = placeLat ?? target?.exif?.lat ?? null;
+    const lng = placeLng ?? target?.exif?.lng ?? null;
+    const memoValue = allowMemo ? placeMemo.trim() : '';
+    const needsVisitInput = !target?.exif?.taken_at;
+    const visitTypeForSave: VisitType = needsVisitInput ? visitType : 'visited';
+    let visitDateIso: string | null = target?.exif?.taken_at ?? null;
+
+    if (needsVisitInput) {
+      if (visitTypeForSave === 'visited') {
+        const iso = toIsoDate(visitDateInput);
+        if (!iso) {
+          Toast.show({
+            type: 'error',
+            text1: '방문 날짜 필요',
+            text2: '방문한 날짜를 입력해주세요.',
+          });
+          return;
+        }
+        visitDateIso = iso;
+      } else {
+        visitDateIso = null;
+      }
+    }
 
     startGlobalLoading();
 
@@ -602,6 +729,8 @@ export default function UploadScreen() {
                 place: response.place,
                 status: 'recognized' as const,
                 memo: memoValue ? memoValue : null,
+                visit_type: visitTypeForSave,
+                visit_date: visitDateIso,
                 thumbnail_url: resolveStorageUrl(response.thumbnail_url) ?? photo.thumbnail_url,
               }
             : photo
@@ -614,6 +743,10 @@ export default function UploadScreen() {
       setPlaceAddress('');
       setPlaceCategory('');
       setPlaceMemo('');
+      setPlaceLat(null);
+      setPlaceLng(null);
+      setVisitType('visited');
+      setVisitDateInput('');
 
       Toast.show({
         type: 'success',
@@ -629,6 +762,150 @@ export default function UploadScreen() {
       });
     } finally {
       endGlobalLoading();
+    }
+  };
+
+  const reverseGeocodeWeb = async (lat: number, lng: number): Promise<string | null> => {
+    const kakao = (globalThis as any).kakao;
+    if (!kakao?.maps?.services) return null;
+    return await new Promise((resolve) => {
+      const geocoder = new kakao.maps.services.Geocoder();
+      geocoder.coord2Address(lng, lat, (result: any[], status: any) => {
+        if (status === kakao.maps.services.Status.OK && result?.[0]) {
+          const road = result[0].road_address?.address_name;
+          const jibun = result[0].address?.address_name;
+          resolve(road || jibun || null);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  };
+
+  const geocodeWeb = async (query: string): Promise<{ lat: number; lng: number; address?: string | null; road_address?: string | null } | null> => {
+    const kakao = (globalThis as any).kakao;
+    if (!kakao?.maps?.services) return null;
+
+    const geocoder = new kakao.maps.services.Geocoder();
+    const addressResult = await new Promise<any | null>((resolve) => {
+      geocoder.addressSearch(query, (result: any[], status: any) => {
+        if (status === kakao.maps.services.Status.OK && result?.[0]) {
+          resolve(result[0]);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+
+    if (addressResult) {
+      return {
+        lat: parseFloat(addressResult.y),
+        lng: parseFloat(addressResult.x),
+        address: addressResult.address_name,
+        road_address: addressResult.road_address_name,
+      };
+    }
+
+    const places = new kakao.maps.services.Places();
+    const placeResult = await new Promise<any | null>((resolve) => {
+      places.keywordSearch(query, (data: any[], status: any) => {
+        if (status === kakao.maps.services.Status.OK && data?.[0]) {
+          resolve(data[0]);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+
+    if (!placeResult) return null;
+    return {
+      lat: parseFloat(placeResult.y),
+      lng: parseFloat(placeResult.x),
+      address: placeResult.address_name,
+      road_address: placeResult.road_address_name,
+    };
+  };
+
+  const handleSelectLocation = async (lat: number, lng: number) => {
+    setPlaceLat(lat);
+    setPlaceLng(lng);
+    setIsReverseGeocoding(true);
+    try {
+      let addr: string | null = null;
+      if (Platform.OS === 'web') {
+        addr = await reverseGeocodeWeb(lat, lng);
+      }
+      if (!addr) {
+        const res = await utilsService.reverseGeocode(lat, lng);
+        addr = res.road_address ?? res.address ?? '';
+      }
+      if (addr) {
+        setPlaceAddress(addr);
+      } else {
+        setPlaceAddress('');
+        Toast.show({
+          type: 'info',
+          text1: '주소 없음',
+          text2: '선택한 위치의 주소를 찾을 수 없습니다.',
+        });
+      }
+    } catch (error: any) {
+      console.error('역지오코딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '주소 조회 실패',
+        text2: error.message || '주소를 불러오는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsReverseGeocoding(false);
+    }
+  };
+
+  const handleGeocodeAddress = async () => {
+    const query = (placeAddress || placeName).trim();
+    if (!query) {
+      Toast.show({
+        type: 'info',
+        text1: '주소 입력 필요',
+        text2: '주소나 장소명을 입력해주세요.',
+      });
+      return;
+    }
+
+    setIsGeocodingAddress(true);
+    try {
+      let res: { lat: number | null; lng: number | null; address?: string | null; road_address?: string | null } | null =
+        null;
+      if (Platform.OS === 'web') {
+        res = await geocodeWeb(query);
+      }
+      if (!res) {
+        res = await utilsService.geocode(query);
+      }
+
+      const addr = res.road_address ?? res.address ?? '';
+      if (addr) {
+        setPlaceAddress(addr);
+      }
+      if (res.lat != null && res.lng != null) {
+        setPlaceLat(res.lat);
+        setPlaceLng(res.lng);
+      } else {
+        Toast.show({
+          type: 'info',
+          text1: '위치 없음',
+          text2: '입력한 주소로 좌표를 찾지 못했습니다.',
+        });
+      }
+    } catch (error: any) {
+      console.error('지오코딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '주소 검색 실패',
+        text2: error.message || '주소를 찾는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsGeocodingAddress(false);
     }
   };
 
@@ -649,6 +926,9 @@ export default function UploadScreen() {
 
   const hasIncompletePlaces = photos.some((p) => p.status !== 'recognized' || !p.place);
   const canRegister = !!uploadId && photos.length > 0 && !hasIncompletePlaces && !isUploading && !isRegistering;
+  const editingPhoto = editingPhotoId ? photos.find((p) => p.photo_id === editingPhotoId) : null;
+  const allowMemo = !!editingPhoto?.exif;
+  const needsVisitInput = !!editingPhoto && !editingPhoto.exif?.taken_at;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -766,7 +1046,7 @@ export default function UploadScreen() {
                     )}
                     <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
                       <Text style={styles.photoLink}>
-                        {photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정'}
+                        {photo.exif ? (photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정') : '장소 수정'}
                       </Text>
                     </Pressable>
                   </>
@@ -854,6 +1134,12 @@ export default function UploadScreen() {
               setPlaceAddress('');
               setPlaceCategory('');
               setPlaceMemo('');
+              setPlaceLat(null);
+              setPlaceLng(null);
+              setIsGeocodingAddress(false);
+              setIsReverseGeocoding(false);
+              setVisitType('visited');
+              setVisitDateInput('');
             }}
           />
           <View style={styles.modalContent}>
@@ -867,6 +1153,12 @@ export default function UploadScreen() {
                   setPlaceAddress('');
                   setPlaceCategory('');
                   setPlaceMemo('');
+                  setPlaceLat(null);
+                  setPlaceLng(null);
+                  setIsGeocodingAddress(false);
+                  setIsReverseGeocoding(false);
+                  setVisitType('visited');
+                  setVisitDateInput('');
                 }}
                 style={styles.modalCloseButton}>
                 <Ionicons name="close" size={24} color="#64748b" />
@@ -891,14 +1183,101 @@ export default function UploadScreen() {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>주소</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="예) 서울 마포구 독막로 12"
-                  placeholderTextColor="#94a3b8"
-                  value={placeAddress}
-                  onChangeText={setPlaceAddress}
-                />
+                <View style={styles.addressRow}>
+                  <TextInput
+                    style={[styles.input, styles.addressInput]}
+                    placeholder="예) 서울 마포구 독막로 12"
+                    placeholderTextColor="#94a3b8"
+                    value={placeAddress}
+                    onChangeText={setPlaceAddress}
+                  />
+                  <Pressable
+                    style={[
+                      styles.addressSearchButton,
+                      (isGeocodingAddress || !(placeAddress || placeName).trim()) && styles.addressSearchButtonDisabled,
+                    ]}
+                    onPress={handleGeocodeAddress}
+                    disabled={isGeocodingAddress || !(placeAddress || placeName).trim()}>
+                    {isGeocodingAddress ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.addressSearchButtonText}>지도 이동</Text>
+                    )}
+                  </Pressable>
+                </View>
+                <Text style={styles.inputHint}>주소나 장소명을 입력하고 지도 이동을 눌러주세요.</Text>
               </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>지도에서 위치 선택</Text>
+                <View style={styles.mapBox}>
+                  <PlacePickerMap lat={placeLat} lng={placeLng} onSelect={handleSelectLocation} />
+                  {isReverseGeocoding && (
+                    <View style={styles.mapOverlay}>
+                      <ActivityIndicator size="small" color="#64748b" />
+                      <Text style={styles.mapOverlayText}>주소 찾는 중...</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.mapHint}>지도를 눌러 위치를 선택하면 주소가 자동 입력됩니다.</Text>
+              </View>
+
+              {needsVisitInput && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>방문 여부</Text>
+                  <View style={styles.visitTypeRow}>
+                    <Pressable
+                      style={[
+                        styles.visitTypeButton,
+                        visitType === 'visited' && styles.visitTypeButtonActive,
+                      ]}
+                      onPress={() => handleVisitTypeChange('visited')}>
+                      <Text
+                        style={[
+                          styles.visitTypeButtonText,
+                          visitType === 'visited' && styles.visitTypeButtonTextActive,
+                        ]}>
+                        방문함
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.visitTypeButton,
+                        visitType === 'planned' && styles.visitTypeButtonActive,
+                      ]}
+                      onPress={() => handleVisitTypeChange('planned')}>
+                      <Text
+                        style={[
+                          styles.visitTypeButtonText,
+                          visitType === 'planned' && styles.visitTypeButtonTextActive,
+                        ]}>
+                        방문 예정
+                      </Text>
+                    </Pressable>
+                  </View>
+                  {visitType === 'visited' && (
+                    <View style={styles.visitDateBlock}>
+                      <Text style={styles.inputLabel}>방문 날짜 *</Text>
+                      {Platform.OS === 'web' ? (
+                        <WebDateInput
+                          value={visitDateInput}
+                          onChange={setVisitDateInput}
+                          hasError={!visitDateInput}
+                        />
+                      ) : (
+                        <TextInput
+                          style={[styles.input, !visitDateInput && styles.inputError]}
+                          placeholder="YYYY-MM-DD"
+                          placeholderTextColor="#94a3b8"
+                          value={visitDateInput}
+                          onChangeText={setVisitDateInput}
+                        />
+                      )}
+                      <Text style={styles.inputHint}>방문한 날짜를 입력해주세요.</Text>
+                    </View>
+                  )}
+                </View>
+              )}
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>카테고리</Text>
@@ -923,20 +1302,22 @@ export default function UploadScreen() {
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>메모</Text>
-                <TextInput
-                  style={[styles.input, styles.memoInput]}
-                  placeholder="장소에 대한 메모를 남겨주세요"
-                  placeholderTextColor="#94a3b8"
-                  value={placeMemo}
-                  onChangeText={setPlaceMemo}
-                  multiline
-                  textAlignVertical="top"
-                  maxLength={2000}
-                />
-                <Text style={styles.memoHint}>최대 2000자</Text>
-              </View>
+              {allowMemo && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>메모</Text>
+                  <TextInput
+                    style={[styles.input, styles.memoInput]}
+                    placeholder="장소에 대한 메모를 남겨주세요"
+                    placeholderTextColor="#94a3b8"
+                    value={placeMemo}
+                    onChangeText={setPlaceMemo}
+                    multiline
+                    textAlignVertical="top"
+                    maxLength={2000}
+                  />
+                  <Text style={styles.memoHint}>최대 2000자</Text>
+                </View>
+              )}
             </ScrollView>
 
             <View style={styles.modalFooter}>
@@ -1410,6 +1791,11 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 8,
   },
+  inputHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#94a3b8',
+  },
   input: {
     backgroundColor: '#f8fafc',
     borderWidth: 1,
@@ -1419,6 +1805,95 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     fontSize: 15,
     color: '#0f172a',
+  },
+  inputError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+  },
+  visitTypeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  visitTypeButton: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  visitTypeButtonActive: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#6366f1',
+  },
+  visitTypeButtonText: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  visitTypeButtonTextActive: {
+    color: '#4f46e5',
+  },
+  visitDateBlock: {
+    marginTop: 12,
+    gap: 8,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addressInput: {
+    flex: 1,
+  },
+  addressSearchButton: {
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 80,
+  },
+  addressSearchButtonDisabled: {
+    backgroundColor: '#cbd5e1',
+  },
+  addressSearchButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  mapBox: {
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#f1f5f9',
+  },
+  mapHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  mapOverlay: {
+    position: 'absolute',
+    bottom: 12,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  mapOverlayText: {
+    fontSize: 12,
+    color: '#64748b',
   },
   memoInput: {
     minHeight: 110,

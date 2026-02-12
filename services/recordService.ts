@@ -30,7 +30,7 @@ export type SpotDetail = {
 
 export type CreateSpotItem = {
   photo_id: string;
-  visited_at: string;
+  visited_at: string | null;
   place: {
     name: string;
     address?: string | null;

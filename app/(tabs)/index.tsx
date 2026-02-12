@@ -24,7 +24,7 @@ const resolveStorageUrl = (url?: string | null) => {
 };
 
 const formatDate = (value?: string | null) => {
-  if (!value) return '날짜 없음';
+  if (!value) return '방문 예정';
   try {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;

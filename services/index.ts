@@ -30,5 +30,5 @@ export type {
 } from "./planService";
 
 export type { MetaOption, MetaOptions } from "./metaService";
-export type { ReverseGeocodeResponse } from "./utilsService";
+export type { ReverseGeocodeResponse, GeocodeResponse } from "./utilsService";
 export type { SpotListItem, SpotDetail, CreateSpotItem, CreateSpotsRequest } from "./recordService";
