@@ -146,7 +146,14 @@ const ensureFileNameWithExt = (name: string, ext: string) => {
   return `${name}.${fallback}`;
 };
 
-const parseExifNumber = (value: any): number | null => {
+const pickString = (...values: any[]): string | null => {
+  for (const v of values) {
+    if (typeof v === 'string') return v;
+  }
+  return null;
+};
+
+const coerceNumber = (value: any): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
     const trimmed = value.trim();
@@ -161,13 +168,28 @@ const parseExifNumber = (value: any): number | null => {
     const num = Number(trimmed);
     return Number.isFinite(num) ? num : null;
   }
+  return null;
+};
+
+const parseRational = (num: any, den: any): number | null => {
+  const n = coerceNumber(num);
+  const d = coerceNumber(den);
+  if (n === null || d === null || d === 0) return null;
+  const out = n / d;
+  return Number.isFinite(out) ? out : null;
+};
+
+const parseExifNumber = (value: any): number | null => {
+  const direct = coerceNumber(value);
+  if (direct !== null) return direct;
   if (value && typeof value === 'object') {
-    const num = (value as any).numerator ?? (value as any).num;
-    const den = (value as any).denominator ?? (value as any).den;
-    if (typeof num === 'number' && typeof den === 'number' && den !== 0) {
-      const out = num / den;
-      return Number.isFinite(out) ? out : null;
-    }
+    const inner = coerceNumber((value as any).value);
+    if (inner !== null) return inner;
+    const frac = parseRational(
+      (value as any).numerator ?? (value as any).num,
+      (value as any).denominator ?? (value as any).den
+    );
+    if (frac !== null) return frac;
   }
   return null;
 };
@@ -177,9 +199,13 @@ const parseExifDms = (value: any): number[] | null => {
     const nums = value.map(parseExifNumber).filter((v) => v !== null) as number[];
     return nums.length >= 3 ? nums.slice(0, 3) : null;
   }
-  if (typeof value === 'string' && value.includes(',')) {
-    const parts = value.split(',').map((p) => parseExifNumber(p));
-    const nums = parts.filter((v) => v !== null) as number[];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const rawParts = trimmed.includes(',')
+      ? trimmed.split(',')
+      : trimmed.replace(/[^\d.+-]+/g, ' ').trim().split(/\s+/);
+    const nums = rawParts.map((p) => parseExifNumber(p)).filter((v) => v !== null) as number[];
     return nums.length >= 3 ? nums.slice(0, 3) : null;
   }
   const single = parseExifNumber(value);
@@ -194,8 +220,21 @@ const toDecimalDegrees = (dms: number[] | null) => {
   return d + m / 60 + s / 3600;
 };
 
-const hasAnyExif = (exif?: ExifData | null) =>
-  exif?.lat != null || exif?.lng != null || !!exif?.taken_at;
+const isZeroLatLng = (lat?: number | null, lng?: number | null) =>
+  lat === 0 && lng === 0;
+
+const normalizeLatLng = (lat?: number | null, lng?: number | null) => {
+  if (isZeroLatLng(lat, lng)) return { lat: null, lng: null };
+  return { lat: lat ?? null, lng: lng ?? null };
+};
+
+const hasAnyExif = (exif?: ExifData | null) => {
+  const hasLatLng =
+    exif?.lat != null &&
+    exif?.lng != null &&
+    !isZeroLatLng(exif.lat, exif.lng);
+  return hasLatLng || !!exif?.taken_at;
+};
 
 const parseExifDate = (value: any): string | null => {
   if (!value) return null;
@@ -223,10 +262,12 @@ const extractMetaFromAsset = (asset: ImagePicker.ImagePickerAsset): UploadMeta |
   let lng: number | null = null;
 
   if (exif) {
-    const latRef = typeof exif.GPSLatitudeRef === 'string' ? exif.GPSLatitudeRef : null;
-    const lngRef = typeof exif.GPSLongitudeRef === 'string' ? exif.GPSLongitudeRef : null;
-    const latDms = parseExifDms(exif.GPSLatitude);
-    const lngDms = parseExifDms(exif.GPSLongitude);
+    const latRef = pickString(exif.GPSLatitudeRef, exif.LatitudeRef, exif.GPSLatRef);
+    const lngRef = pickString(exif.GPSLongitudeRef, exif.LongitudeRef, exif.GPSLongRef);
+    const latSource = exif.GPSLatitude ?? exif.Latitude ?? exif.latitude ?? exif.GPSLat ?? exif.GPS_Latitude;
+    const lngSource = exif.GPSLongitude ?? exif.Longitude ?? exif.longitude ?? exif.GPSLong ?? exif.GPS_Longitude;
+    const latDms = parseExifDms(latSource);
+    const lngDms = parseExifDms(lngSource);
 
     const latValue = toDecimalDegrees(latDms);
     const lngValue = toDecimalDegrees(lngDms);
@@ -246,6 +287,11 @@ const extractMetaFromAsset = (asset: ImagePicker.ImagePickerAsset): UploadMeta |
     }
   }
 
+  if (isZeroLatLng(lat, lng)) {
+    lat = null;
+    lng = null;
+  }
+
   const takenAt =
     parseExifDate(exif?.DateTimeOriginal) ||
     parseExifDate(exif?.DateTimeDigitized) ||
@@ -263,8 +309,10 @@ const extractMetaFromAsset = (asset: ImagePicker.ImagePickerAsset): UploadMeta |
 
 const mergeMeta = (primary?: UploadMeta | null, secondary?: UploadMeta | null): UploadMeta | null => {
   if (!primary && !secondary) return null;
-  const lat = primary?.lat ?? secondary?.lat ?? null;
-  const lng = primary?.lng ?? secondary?.lng ?? null;
+  const primaryCoords = normalizeLatLng(primary?.lat, primary?.lng);
+  const secondaryCoords = normalizeLatLng(secondary?.lat, secondary?.lng);
+  const lat = primaryCoords.lat ?? secondaryCoords.lat ?? null;
+  const lng = primaryCoords.lng ?? secondaryCoords.lng ?? null;
   const taken_at = primary?.taken_at ?? secondary?.taken_at ?? null;
   if (lat === null && lng === null && !taken_at) return null;
   return { lat, lng, taken_at };
@@ -283,8 +331,10 @@ const extractMetaFromWebUri = async (uri: string): Promise<UploadMeta | null> =>
     let lat: number | null = null;
     let lng: number | null = null;
 
-    if (typeof data.latitude === 'number') lat = data.latitude;
-    if (typeof data.longitude === 'number') lng = data.longitude;
+    const dataLat = parseExifNumber(data.latitude);
+    const dataLng = parseExifNumber(data.longitude);
+    if (dataLat !== null) lat = dataLat;
+    if (dataLng !== null) lng = dataLng;
 
     if (lat === null || lng === null) {
       const latRef = typeof data.GPSLatitudeRef === 'string' ? data.GPSLatitudeRef : null;
@@ -299,6 +349,11 @@ const extractMetaFromWebUri = async (uri: string): Promise<UploadMeta | null> =>
       if (lngValue !== null) {
         lng = lngRef && lngRef.toUpperCase() === 'W' ? -lngValue : lngValue;
       }
+    }
+
+    if (isZeroLatLng(lat, lng)) {
+      lat = null;
+      lng = null;
     }
 
     const takenAt =

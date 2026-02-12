@@ -791,6 +791,10 @@ export default function ResultsScreen() {
   const [deleteConfirmIndex, setDeleteConfirmIndex] = useState<number | null>(
     null,
   );
+  // ResultsScreen 컴포넌트 내부 상단에 추가
+  const [selectedAltMap, setSelectedAltMap] = useState<
+    Map<string, AlternativeSpot>
+  >(new Map());
 
   const planData = (
     isEditMode && editedPlan ? editedPlan : lastGeneratedPlan
@@ -814,6 +818,13 @@ export default function ResultsScreen() {
     setOriginalPlan(null);
     setSelectedSpots(new Set());
     setAlternativesModalVisible(false);
+    setAlternatives([]);
+  }, []);
+
+  // 모달을 닫을 때 선택 상태를 초기화하기 위해 cancelEditMode 등에 추가
+  const closeAlternativesModal = useCallback(() => {
+    setAlternativesModalVisible(false);
+    setSelectedAltMap(new Map()); // 선택 데이터 초기화
     setAlternatives([]);
   }, []);
 
@@ -997,70 +1008,87 @@ export default function ResultsScreen() {
   }, [planData, user, selectedSpots, activeDay]);
 
   // 대체 장소로 교체
-  const replaceSpotWithAlternative = useCallback(
+  const toggleAlternativeSelection = useCallback(
     (oldSpotName: string, alternative: AlternativeSpot) => {
-      if (!editedPlan) return;
-
-      const updatedPlan = deepClone(editedPlan);
-      const dayPlan = updatedPlan.variants[activeDay];
-      const timeline = dayPlan.timelines.fastest_version;
-
-      // 타임라인에서 장소 찾아서 교체
-      const spotIndex = timeline.findIndex((item) => item.name === oldSpotName);
-      if (spotIndex === -1) return;
-
-      // 새 장소 정보로 교체
-      const oldSpot = timeline[spotIndex];
-      timeline[spotIndex] = {
-        ...oldSpot,
-        name: alternative.name,
-        category: alternative.category,
-      };
-
-      // route/restaurants/accommodations 배열도 업데이트
-      const updateArray = (
-        arr: {
-          name: string;
-          category: string;
-          category2?: string;
-          lat: number;
-          lng: number;
-        }[],
-      ) => {
-        const idx = arr.findIndex((item) => item.name === oldSpotName);
-        if (idx !== -1) {
-          arr[idx] = {
-            name: alternative.name,
-            category: alternative.category,
-            category2: alternative.category2 || alternative.category,
-            lat: alternative.lat,
-            lng: alternative.lng,
-          };
+      setSelectedAltMap((prev) => {
+        const newMap = new Map(prev);
+        // 이미 선택된 것이 있고, 똑같은 장소를 다시 클릭했다면 해제
+        if (newMap.get(oldSpotName)?.name === alternative.name) {
+          newMap.delete(oldSpotName);
+        } else {
+          // 해당 원본 장소에 대해 새로운 대체 장소 할당 (하나의 원본엔 하나의 대체만 가능)
+          newMap.set(oldSpotName, alternative);
         }
-      };
-
-      updateArray(dayPlan.route);
-      updateArray(dayPlan.restaurants);
-      updateArray(dayPlan.accommodations);
-
-      // 시간 재계산
-      dayPlan.timelines.fastest_version = recalculateTimes(timeline);
-
-      setEditedPlan(updatedPlan);
-      setSelectedSpots(new Set());
-      setAlternativesModalVisible(false);
-      setAlternatives([]);
-
-      Toast.show({
-        type: "success",
-        text1: "교체 완료",
-        text2: `${oldSpotName} → ${alternative.name}`,
-        position: "top",
-        visibilityTime: 2000,
+        return newMap;
       });
     },
-    [editedPlan, activeDay],
+    [],
   );
+
+  const applySelectedAlternatives = useCallback(() => {
+    if (!editedPlan || selectedAltMap.size === 0) return;
+
+    const updatedPlan = deepClone(editedPlan);
+    const dayPlan = updatedPlan.variants[activeDay];
+    const timeline = dayPlan.timelines.fastest_version;
+
+    if (!timeline || !Array.isArray(timeline)) {
+      console.error("타임라인 데이터를 찾을 수 없습니다.", activeDay);
+      Toast.show({
+        type: "error",
+        text1: "데이터 오류",
+        text2: "일정 데이터를 불러올 수 없습니다.",
+      });
+      return;
+    }
+
+    // 교체 로직 진행
+    selectedAltMap.forEach((alternative, oldSpotName) => {
+      const spotIndex = timeline.findIndex((item) => item.name === oldSpotName);
+
+      if (spotIndex !== -1) {
+        const oldSpot = timeline[spotIndex];
+        // 타임라인 데이터 업데이트
+        timeline[spotIndex] = {
+          ...oldSpot,
+          name: alternative.name,
+          category: alternative.category,
+        };
+
+        // route, restaurants 등 다른 배열도 함께 업데이트
+        const updateArray = (arr?: RouteItem[]) => {
+          if (!arr) return;
+          const idx = arr.findIndex((item) => item.name === oldSpotName);
+          if (idx !== -1) {
+            const oldItem = arr[idx];
+            arr[idx] = {
+              ...oldItem,
+              name: alternative.name,
+              category: alternative.category,
+              category2: alternative.category2 || alternative.category,
+              lat: alternative.lat,
+              lng: alternative.lng,
+            };
+          }
+        };
+
+        updateArray(dayPlan.route);
+        updateArray(dayPlan.restaurants);
+        updateArray(dayPlan.accommodations);
+      }
+    });
+
+    // 시간 재계산 및 상태 반영
+    dayPlan.timelines.fastest_version = recalculateTimes(timeline);
+    setEditedPlan(updatedPlan);
+    closeAlternativesModal();
+
+    Toast.show({
+      type: "success",
+      text1: "교체 완료",
+      text2: `${selectedAltMap.size}개의 장소가 변경되었습니다.`,
+    });
+  }, [editedPlan, activeDay, selectedAltMap, closeAlternativesModal]);
 
   // 날짜 목록
   const dayKeys = useMemo(() => {
@@ -2094,9 +2122,7 @@ export default function ResultsScreen() {
             zIndex: 1000,
           }}
           onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setAlternativesModalVisible(false);
-            }
+            if (e.target === e.currentTarget) closeAlternativesModal();
           }}
         >
           <div
@@ -2108,11 +2134,12 @@ export default function ResultsScreen() {
               maxHeight: "80%",
               paddingBottom: 40,
               overflow: "hidden",
+              position: "relative",
             }}
           >
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>대체 장소 추천</Text>
-              <Pressable onPress={() => setAlternativesModalVisible(false)}>
+              <Text style={styles.modalTitle}>대체 장소 선택</Text>
+              <Pressable onPress={closeAlternativesModal}>
                 <Ionicons name="close" size={24} color="#64748b" />
               </Pressable>
             </View>
@@ -2124,7 +2151,9 @@ export default function ResultsScreen() {
             <ScrollView style={styles.alternativesList}>
               {Array.from(selectedSpots).map((spotName) => (
                 <View key={spotName} style={styles.spotReplacementSection}>
-                  <Text style={styles.replacementLabel}>{spotName} →</Text>
+                  <Text style={styles.replacementLabel}>
+                    {spotName}의 대체 추천
+                  </Text>
                   {alternatives
                     .filter((alt) => {
                       const originalSpot = timeline.find(
@@ -2132,79 +2161,77 @@ export default function ResultsScreen() {
                       );
                       return originalSpot?.category === alt.category;
                     })
-                    .slice(0, 3)
-                    .map((alt, altIdx) => (
-                      <Pressable
-                        key={altIdx}
-                        style={styles.alternativeCard}
-                        onPress={() =>
-                          replaceSpotWithAlternative(spotName, alt)
-                        }
-                      >
-                        <View style={styles.alternativeCardContent}>
-                          <View
-                            style={[
-                              styles.alternativeMarker,
-                              {
-                                backgroundColor: getCategoryColor(alt.category)
-                                  .accent,
-                              },
-                            ]}
-                          >
-                            <Text style={styles.alternativeMarkerText}>
-                              {altIdx + 1}
-                            </Text>
-                          </View>
-                          <View style={styles.alternativeInfo}>
-                            <Text style={styles.alternativeName}>
-                              {alt.name}
-                            </Text>
-                            <View style={styles.alternativeMeta}>
-                              <View
-                                style={[
-                                  styles.categoryBadge,
-                                  {
-                                    backgroundColor: getCategoryColor(
-                                      alt.category,
-                                    ).bg,
-                                  },
-                                ]}
-                              >
+                    .map((alt, altIdx) => {
+                      const isSelected =
+                        selectedAltMap.get(spotName)?.name === alt.name;
+                      return (
+                        <Pressable
+                          key={altIdx}
+                          style={[
+                            styles.alternativeCard,
+                            isSelected && styles.placeCardSelected,
+                          ]}
+                          onPress={() =>
+                            toggleAlternativeSelection(spotName, alt)
+                          }
+                        >
+                          <View style={styles.alternativeCardContent}>
+                            {/* 체크박스 UI */}
+                            <View
+                              style={[
+                                styles.checkbox,
+                                { marginRight: 12 },
+                                isSelected && styles.checkboxChecked,
+                              ]}
+                            >
+                              {isSelected && (
                                 <Ionicons
-                                  name={getCategoryIcon(alt.category) as any}
-                                  size={12}
-                                  color={getCategoryColor(alt.category).text}
+                                  name="checkmark"
+                                  size={14}
+                                  color="#fff"
                                 />
-                                <Text
-                                  style={[
-                                    styles.categoryText,
-                                    {
-                                      color: getCategoryColor(alt.category)
-                                        .text,
-                                    },
-                                  ]}
-                                >
-                                  {alt.category}
-                                </Text>
-                              </View>
-                              {alt.reason && (
-                                <Text style={styles.alternativeReason}>
-                                  {alt.reason}
-                                </Text>
                               )}
                             </View>
+
+                            <View style={styles.alternativeInfo}>
+                              <Text style={styles.alternativeName}>
+                                {alt.name}
+                              </Text>
+                              <Text style={styles.alternativeReason}>
+                                {alt.reason}
+                              </Text>
+                            </View>
                           </View>
-                          <Ionicons
-                            name="chevron-forward"
-                            size={20}
-                            color="#cbd5e1"
-                          />
-                        </View>
-                      </Pressable>
-                    ))}
+                        </Pressable>
+                      );
+                    })}
                 </View>
               ))}
             </ScrollView>
+
+            {/* 하단 적용 버튼 섹션 */}
+            <View
+              style={{
+                padding: 20,
+                borderTopWidth: 1,
+                borderTopColor: "#f1f5f9",
+              }}
+            >
+              <Pressable
+                style={[
+                  styles.emptyButton,
+                  selectedAltMap.size === 0 && { backgroundColor: "#cbd5e1" },
+                ]}
+                onPress={applySelectedAlternatives}
+                disabled={selectedAltMap.size === 0}
+              >
+                <Text style={styles.emptyButtonText}>
+                  {selectedAltMap.size > 0
+                    ? `${selectedAltMap.size}개 장소 교체하기`
+                    : "장소를 선택해주세요"}
+                </Text>
+              </Pressable>
+            </View>
           </div>
         </div>
       )}
