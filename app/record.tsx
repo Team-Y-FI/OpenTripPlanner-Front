@@ -19,7 +19,7 @@ const resolveStorageUrl = (url?: string | null) => {
 };
 
 const formatDate = (value?: string | null) => {
-  if (!value) return '날짜 없음';
+  if (!value) return '';
   try {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
@@ -27,6 +27,12 @@ const formatDate = (value?: string | null) => {
   } catch {
     return value;
   }
+};
+
+const formatVisitLabel = (value?: string | null) => {
+  if (!value) return '방문 예정';
+  const dateText = formatDate(value);
+  return dateText ? `${dateText} 방문` : '방문 예정';
 };
 
 export default function RecordScreen() {
@@ -150,7 +156,7 @@ export default function RecordScreen() {
               <Text style={styles.summaryTag}>내 지도 스팟</Text>
               <Text style={styles.summaryTitle}>{spot.place.name}</Text>
               <Text style={styles.summaryAddress}>{spot.place.address || '주소 없음'}</Text>
-              <Text style={styles.summaryDate}>{formatDate(spot.visited_at)} 방문</Text>
+              <Text style={styles.summaryDate}>{formatVisitLabel(spot.visited_at)}</Text>
               <View style={styles.tags}>
                 <View style={styles.tag}>
                   <Text style={styles.tagText}>{spot.place.category || '기타'}</Text>
