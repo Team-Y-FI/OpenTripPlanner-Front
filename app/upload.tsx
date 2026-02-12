@@ -179,6 +179,8 @@ const parseExifDms = (value: any): number[] | null => {
     const nums = parts.filter((v) => v !== null) as number[];
     return nums.length >= 3 ? nums.slice(0, 3) : null;
   }
+  const single = parseExifNumber(value);
+  if (single !== null) return [single, 0, 0];
   return null;
 };
 
@@ -253,6 +255,61 @@ const extractMetaFromAsset = (asset: ImagePicker.ImagePickerAsset): UploadMeta |
   };
 };
 
+const mergeMeta = (primary?: UploadMeta | null, secondary?: UploadMeta | null): UploadMeta | null => {
+  if (!primary && !secondary) return null;
+  const lat = primary?.lat ?? secondary?.lat ?? null;
+  const lng = primary?.lng ?? secondary?.lng ?? null;
+  const taken_at = primary?.taken_at ?? secondary?.taken_at ?? null;
+  if (lat === null && lng === null && !taken_at) return null;
+  return { lat, lng, taken_at };
+};
+
+const extractMetaFromWebUri = async (uri: string): Promise<UploadMeta | null> => {
+  if (!uri) return null;
+  try {
+    const resp = await fetch(uri);
+    const blob = await resp.blob();
+    const mod = await import('exifr');
+    const exifr = (mod as any).default ?? mod;
+    const data = await exifr.parse(blob, { gps: true, exif: true, tiff: true, ifd0: true });
+    if (!data) return null;
+
+    let lat: number | null = null;
+    let lng: number | null = null;
+
+    if (typeof data.latitude === 'number') lat = data.latitude;
+    if (typeof data.longitude === 'number') lng = data.longitude;
+
+    if (lat === null || lng === null) {
+      const latRef = typeof data.GPSLatitudeRef === 'string' ? data.GPSLatitudeRef : null;
+      const lngRef = typeof data.GPSLongitudeRef === 'string' ? data.GPSLongitudeRef : null;
+      const latDms = parseExifDms(data.GPSLatitude);
+      const lngDms = parseExifDms(data.GPSLongitude);
+      const latValue = toDecimalDegrees(latDms);
+      const lngValue = toDecimalDegrees(lngDms);
+      if (latValue !== null) {
+        lat = latRef && latRef.toUpperCase() === 'S' ? -latValue : latValue;
+      }
+      if (lngValue !== null) {
+        lng = lngRef && lngRef.toUpperCase() === 'W' ? -lngValue : lngValue;
+      }
+    }
+
+    const takenAt =
+      parseExifDate(data.DateTimeOriginal) ||
+      parseExifDate(data.DateTimeDigitized) ||
+      parseExifDate(data.DateTime) ||
+      parseExifDate(data.CreateDate) ||
+      parseExifDate(data.ModifyDate) ||
+      null;
+
+    if (lat === null && lng === null && !takenAt) return null;
+    return { lat, lng, taken_at: takenAt };
+  } catch {
+    return null;
+  }
+};
+
 const resizeAndCompressAsset = async (
   asset: ImagePicker.ImagePickerAsset,
   rawName: string,
@@ -295,7 +352,15 @@ const prepareUploadAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<
   const rawName = getAssetName(asset);
   const ext = getAssetExt(rawName);
   const mimeType = asset.mimeType || (ext ? `image/${ext}` : 'image/jpeg');
-  const meta = extractMetaFromAsset(asset);
+  let meta = extractMetaFromAsset(asset);
+  if (Platform.OS === 'web') {
+    const needsWebMeta =
+      !meta || meta.lat === null || meta.lng === null || meta.taken_at === null || meta.taken_at === undefined;
+    if (needsWebMeta) {
+      const webMeta = await extractMetaFromWebUri(asset.uri);
+      meta = mergeMeta(meta, webMeta);
+    }
+  }
 
   try {
   const resized = await resizeAndCompressAsset(asset, rawName, ext);
