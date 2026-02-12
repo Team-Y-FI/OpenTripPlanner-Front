@@ -5,23 +5,6 @@ import {
   type AlternativeSpot,
   type PlaceNode,
 } from "@/services/planService";
-import {
-  closestCenter,
-  DndContext,
-  DragEndEvent,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -502,8 +485,7 @@ const recalculateTimes = (timeline: TimelineItem[]): TimelineItem[] => {
 const deepClone = <T,>(obj: T): T => JSON.parse(JSON.stringify(obj));
 
 // 드래그 가능한 장소 카드 컴포넌트 (편집 모드용)
-interface SortablePlaceCardProps {
-  id: string;
+interface PlaceCardProps {
   item: TimelineItem;
   idx: number;
   isEditMode: boolean;
@@ -516,8 +498,7 @@ interface SortablePlaceCardProps {
   onToggleSelect: () => void;
 }
 
-function SortablePlaceCard({
-  id,
+function PlaceCard({
   item,
   idx,
   isEditMode,
@@ -528,23 +509,7 @@ function SortablePlaceCard({
   onPress,
   onDelete,
   onToggleSelect,
-}: SortablePlaceCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    zIndex: isDragging ? 1000 : 1,
-  };
-
+}: PlaceCardProps) {
   const { startTime, endTime, extraLabel, extraColor } = splitTimeAndExtra(
     item.time,
   );
@@ -552,12 +517,10 @@ function SortablePlaceCard({
   const categoryIcon = getCategoryIcon(item.category);
 
   return (
-    <div ref={setNodeRef} style={style}>
       <View
         style={[
           styles.placeCard,
           isHovered && styles.placeCardHovered,
-          isDragging && styles.placeCardDragging,
           isEditMode && styles.placeCardEdit,
           isEditMode && isSelected && styles.placeCardSelected,
         ]}
@@ -734,16 +697,7 @@ function SortablePlaceCard({
 
         {/* 오른쪽 액션 버튼 영역 */}
         {isEditMode ? (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              marginLeft: 8,
-              gap: 4,
-            }}
-          >
+          <View style={{ marginLeft: 8 }}>
             {/* 삭제 버튼 */}
             <Pressable
               style={{
@@ -758,33 +712,13 @@ function SortablePlaceCard({
             >
               <Ionicons name="trash-outline" size={16} color="#ef4444" />
             </Pressable>
-            {/* 드래그 핸들 */}
-            <button
-              type="button"
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                backgroundColor: "#eef2ff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                border: "none",
-                cursor: "grab",
-              }}
-              {...attributes}
-              {...listeners}
-            >
-              <Ionicons name="menu" size={18} color="#6366f1" />
-            </button>
-          </div>
+          </View>
         ) : (
           <Pressable style={styles.detailButton}>
             <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
           </Pressable>
         )}
       </View>
-    </div>
   );
 }
 
@@ -865,18 +799,6 @@ export default function ResultsScreen() {
   const planData = (
     isEditMode && editedPlan ? editedPlan : lastGeneratedPlan
   ) as PlanData | null;
-
-  // @dnd-kit 센서 설정
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
 
   // 편집 모드 진입
   const enterEditMode = useCallback(() => {
@@ -963,7 +885,7 @@ export default function ResultsScreen() {
 
       // 서버 응답 결과로 최종 상태 업데이트
       const finalPlan = deepClone(editedPlan);
-      finalPlan.variants[activeDay].route = response.route;
+      finalPlan.variants[activeDay].route = response.route as unknown as RouteItem[];
       finalPlan.variants[activeDay].timelines = response.timelines;
 
       setLastGeneratedPlan(finalPlan); // 전역 상태 갱신
@@ -1014,35 +936,6 @@ export default function ResultsScreen() {
       });
     },
     [editedPlan],
-  );
-
-  // 드래그 앤 드롭 완료 (화면 순서만 즉시 변경)
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id || !editedPlan) return;
-
-      const oldIndex = parseInt(String(active.id).split("-")[1]);
-      const newIndex = parseInt(String(over.id).split("-")[1]);
-
-      const updatedPlan = deepClone(editedPlan);
-      const dayPlan = updatedPlan.variants[activeDay];
-
-      const newTimeline = arrayMove(
-        dayPlan.timelines.fastest_version,
-        oldIndex,
-        newIndex,
-      );
-      dayPlan.timelines.fastest_version = recalculateTimes(newTimeline);
-
-      const routeOrder = dayPlan.timelines.fastest_version.map((t) => t.name);
-      dayPlan.route.sort(
-        (a, b) => routeOrder.indexOf(a.name) - routeOrder.indexOf(b.name),
-      );
-
-      setEditedPlan(updatedPlan);
-    },
-    [editedPlan, activeDay],
   );
 
   // 장소 선택 토글
@@ -1846,19 +1739,10 @@ export default function ResultsScreen() {
           </View>
 
           {/* 타임라인 */}
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
+          <ScrollView
+            style={styles.timelineScroll}
+            showsVerticalScrollIndicator={false}
           >
-            <SortableContext
-              items={timeline.map((_, idx) => `place-${idx}`)}
-              strategy={verticalListSortingStrategy}
-            >
-              <ScrollView
-                style={styles.timelineScroll}
-                showsVerticalScrollIndicator={false}
-              >
                 <View style={styles.timelineContainer}>
                   {timeline.map((item, idx) => {
                     const travelInfo =
@@ -2172,8 +2056,7 @@ export default function ResultsScreen() {
                           )}
 
                         {/* 장소 카드 */}
-                        <SortablePlaceCard
-                          id={`place-${idx}`}
+                        <PlaceCard
                           item={item}
                           idx={idx}
                           isEditMode={isEditMode}
@@ -2209,9 +2092,7 @@ export default function ResultsScreen() {
                     </View>
                   </View>
                 </View>
-              </ScrollView>
-            </SortableContext>
-          </DndContext>
+          </ScrollView>
         </View>
 
         {/* 오른쪽: 지도 */}
@@ -2820,12 +2701,6 @@ const styles = StyleSheet.create({
   placeCardHovered: {
     borderColor: "#e0e7ff",
     backgroundColor: "#fafbff",
-  },
-  placeCardDragging: {
-    borderColor: "#6366f1",
-    backgroundColor: "#f0f9ff",
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
   },
   placeCardSelected: {
     backgroundColor: "#eef2ff",
