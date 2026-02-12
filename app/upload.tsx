@@ -72,7 +72,10 @@ const DEFAULT_LIMITS: UploadLimits = {
   allowed_exts: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
 };
 
-const DEFAULT_PLACE_CATEGORIES = ["카페", "맛집", "전시", "공원", "야경", "쇼핑"];
+const ensureEtcCategory = (items: string[]) =>
+  items.includes('기타') ? items : [...items, '기타'];
+
+const DEFAULT_PLACE_CATEGORIES = ensureEtcCategory(["카페", "맛집", "전시", "공원", "야경", "쇼핑"]);
 
 const webDateInputBaseStyle: any = {
   width: '100%',
@@ -190,6 +193,9 @@ const toDecimalDegrees = (dms: number[] | null) => {
   if (![d, m, s].every((v) => Number.isFinite(v))) return null;
   return d + m / 60 + s / 3600;
 };
+
+const hasAnyExif = (exif?: ExifData | null) =>
+  exif?.lat != null || exif?.lng != null || !!exif?.taken_at;
 
 const parseExifDate = (value: any): string | null => {
   if (!value) return null;
@@ -440,7 +446,7 @@ export default function UploadScreen() {
       .getOptions()
       .then((opts) => {
         if (opts.place_categories?.length) {
-          setPlaceCategories(opts.place_categories.map((o) => o.label));
+          setPlaceCategories(ensureEtcCategory(opts.place_categories.map((o) => o.label)));
         }
       })
       .catch(() => {});
@@ -595,12 +601,15 @@ export default function UploadScreen() {
       });
 
       // 업로드된 사진들을 상태에 추가
-      const newPhotos: PhotoData[] = response.photos.map((photo) => ({
-        ...photo,
-        thumbnail_url: resolveStorageUrl(photo.thumbnail_url),
-        visit_type: 'visited',
-        visit_date: photo.exif?.taken_at ?? null,
-      }));
+      const newPhotos: PhotoData[] = response.photos.map((photo) => {
+        const defaultVisitType: VisitType = hasAnyExif(photo.exif) ? 'visited' : 'planned';
+        return {
+          ...photo,
+          thumbnail_url: resolveStorageUrl(photo.thumbnail_url),
+          visit_type: defaultVisitType,
+          visit_date: defaultVisitType === 'visited' ? photo.exif?.taken_at ?? null : null,
+        };
+      });
 
       setUploadId(response.upload_id);
       setPhotos(newPhotos);
@@ -717,7 +726,8 @@ export default function UploadScreen() {
       setPlaceLng(photo.place?.lng ?? photo.exif?.lng ?? null);
       setIsGeocodingAddress(false);
       setIsReverseGeocoding(false);
-      const defaultVisitType: VisitType = photo.visit_type ?? 'visited';
+      const defaultVisitType: VisitType =
+        photo.visit_type ?? (hasAnyExif(photo.exif) ? 'visited' : 'planned');
       setVisitType(defaultVisitType);
       const initialVisitDate =
         defaultVisitType === 'planned' ? null : photo.visit_date || photo.exif?.taken_at || null;
@@ -740,29 +750,29 @@ export default function UploadScreen() {
 
     const target = photos.find((p) => p.photo_id === editingPhotoId);
     if (!target) return;
-    const allowMemo = !!target?.exif;
+    const allowMemo = visitType === 'visited';
     const lat = placeLat ?? target?.exif?.lat ?? null;
     const lng = placeLng ?? target?.exif?.lng ?? null;
     const memoValue = allowMemo ? placeMemo.trim() : '';
-    const needsVisitInput = !target?.exif?.taken_at;
-    const visitTypeForSave: VisitType = needsVisitInput ? visitType : 'visited';
+    const hasExifTakenAt = !!target?.exif?.taken_at;
+    const visitTypeForSave: VisitType = visitType;
+    const showVisitDateInput = visitTypeForSave === 'visited';
     let visitDateIso: string | null = target?.exif?.taken_at ?? null;
 
-    if (needsVisitInput) {
-      if (visitTypeForSave === 'visited') {
-        const iso = toIsoDate(visitDateInput);
-        if (!iso) {
-          Toast.show({
-            type: 'error',
-            text1: '방문 날짜 필요',
-            text2: '방문한 날짜를 입력해주세요.',
-          });
-          return;
-        }
+    if (showVisitDateInput) {
+      const iso = toIsoDate(visitDateInput);
+      if (iso) {
         visitDateIso = iso;
-      } else {
-        visitDateIso = null;
+      } else if (!hasExifTakenAt) {
+        Toast.show({
+          type: 'error',
+          text1: '방문 날짜 필요',
+          text2: '방문한 날짜를 입력해주세요.',
+        });
+        return;
       }
+    } else if (visitTypeForSave === 'planned') {
+      visitDateIso = null;
     }
 
     startGlobalLoading();
@@ -992,8 +1002,11 @@ export default function UploadScreen() {
   const hasIncompletePlaces = photos.some((p) => p.status !== 'recognized' || !p.place);
   const canRegister = !!uploadId && photos.length > 0 && !hasIncompletePlaces && !isUploading && !isRegistering;
   const editingPhoto = editingPhotoId ? photos.find((p) => p.photo_id === editingPhotoId) : null;
-  const allowMemo = !!editingPhoto?.exif;
-  const needsVisitInput = !!editingPhoto && !editingPhoto.exif?.taken_at;
+  const allowMemo = visitType === 'visited';
+  const hasExifTakenAt = !!editingPhoto?.exif?.taken_at;
+  const showVisitType = !!editingPhoto;
+  const showVisitDateInput = showVisitType && visitType === 'visited';
+  const needsVisitDate = showVisitDateInput && !visitDateInput && !hasExifTakenAt;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -1111,7 +1124,9 @@ export default function UploadScreen() {
                     )}
                     <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
                       <Text style={styles.photoLink}>
-                        {photo.exif ? (photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정') : '장소 수정'}
+                        {photo.visit_type === 'visited'
+                          ? (photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정')
+                          : '장소 수정'}
                       </Text>
                     </Pressable>
                   </>
@@ -1291,7 +1306,7 @@ export default function UploadScreen() {
                 <Text style={styles.mapHint}>지도를 눌러 위치를 선택하면 주소가 자동 입력됩니다.</Text>
               </View>
 
-              {needsVisitInput && (
+              {showVisitType && (
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>방문 여부</Text>
                   <View style={styles.visitTypeRow}>
@@ -1324,18 +1339,18 @@ export default function UploadScreen() {
                       </Text>
                     </Pressable>
                   </View>
-                  {visitType === 'visited' && (
+                  {showVisitDateInput && (
                     <View style={styles.visitDateBlock}>
                       <Text style={styles.inputLabel}>방문 날짜 *</Text>
                       {Platform.OS === 'web' ? (
                         <WebDateInput
                           value={visitDateInput}
                           onChange={setVisitDateInput}
-                          hasError={!visitDateInput}
+                          hasError={needsVisitDate}
                         />
                       ) : (
                         <TextInput
-                          style={[styles.input, !visitDateInput && styles.inputError]}
+                          style={[styles.input, needsVisitDate && styles.inputError]}
                           placeholder="YYYY-MM-DD"
                           placeholderTextColor="#94a3b8"
                           value={visitDateInput}
