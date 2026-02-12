@@ -1125,23 +1125,24 @@ export default function ResultsScreen() {
       };
 
       // route/restaurants/accommodations 배열도 업데이트
-      const updateArray = (
-        arr: {
-          name: string;
-          category: string;
-          category2?: string;
-          lat: number;
-          lng: number;
-        }[],
-      ) => {
+      const updateArray = (arr: RouteItem[]) => {
         const idx = arr.findIndex((item) => item.name === oldSpotName);
         if (idx !== -1) {
+          const oldItem = arr[idx];
+
           arr[idx] = {
             name: alternative.name,
             category: alternative.category,
             category2: alternative.category2 || alternative.category,
             lat: alternative.lat,
             lng: alternative.lng,
+            addr: oldItem.addr, // 주소 정보 유지 (선택사항)
+
+            // 기존 장소의 type과 체류시간(stay) 등을 그대로 승계합니다.
+            type: oldItem.type,
+            stay: oldItem.stay,
+            window: oldItem.window,
+            orig_time_str: oldItem.orig_time_str,
           };
         }
       };
