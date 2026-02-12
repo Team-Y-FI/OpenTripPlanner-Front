@@ -27,8 +27,8 @@ const resolveStorageUrl = (url?: string | null) => {
 const PICKER_MEDIA_TYPES: ImagePicker.MediaType[] = ['images'];
 
 interface ExifData {
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   taken_at: string | null;
 }
 
@@ -1119,12 +1119,16 @@ export default function UploadScreen() {
                   <>
                     {photo.exif ? (
                       <>
-                        <Text style={styles.photoDetail}>
-                          EXIF 위치 정보: {photo.exif.lat.toFixed(6)}, {photo.exif.lng.toFixed(6)}
-                        </Text>
-                        <Text style={styles.photoDetail}>
-                          촬영 시간: {formatDateTime(photo.exif.taken_at)}
-                        </Text>
+                        {photo.exif.lat != null && photo.exif.lng != null && (
+                          <Text style={styles.photoDetail}>
+                            EXIF 위치 정보: {photo.exif.lat.toFixed(6)}, {photo.exif.lng.toFixed(6)}
+                          </Text>
+                        )}
+                        {photo.exif.taken_at && (
+                          <Text style={styles.photoDetail}>
+                            촬영 시간: {formatDateTime(photo.exif.taken_at)}
+                          </Text>
+                        )}
                         <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
                           <Text style={styles.photoLink}>장소 정보 입력하기</Text>
                         </Pressable>
