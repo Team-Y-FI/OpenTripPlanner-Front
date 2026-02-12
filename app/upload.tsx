@@ -51,7 +51,17 @@ type UploadAsset = {
   uri: string;
   name: string;
   type: string;
+  meta?: UploadMeta | null;
 };
+
+type UploadMeta = {
+  lat?: number | null;
+  lng?: number | null;
+  taken_at?: string | null;
+};
+
+const MAX_IMAGE_DIMENSION = 1600;
+const JPEG_COMPRESS_QUALITY = 0.75;
 
 const DEFAULT_LIMITS: UploadLimits = {
   max_photos: 20,
@@ -87,30 +97,189 @@ const ensureFileNameWithExt = (name: string, ext: string) => {
   return `${name}.${fallback}`;
 };
 
+const parseExifNumber = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.includes('/')) {
+      const [n, d] = trimmed.split('/');
+      const num = Number(n);
+      const den = Number(d);
+      if (Number.isFinite(num) && Number.isFinite(den) && den !== 0) return num / den;
+      return null;
+    }
+    const num = Number(trimmed);
+    return Number.isFinite(num) ? num : null;
+  }
+  if (value && typeof value === 'object') {
+    const num = (value as any).numerator ?? (value as any).num;
+    const den = (value as any).denominator ?? (value as any).den;
+    if (typeof num === 'number' && typeof den === 'number' && den !== 0) {
+      const out = num / den;
+      return Number.isFinite(out) ? out : null;
+    }
+  }
+  return null;
+};
+
+const parseExifDms = (value: any): number[] | null => {
+  if (Array.isArray(value)) {
+    const nums = value.map(parseExifNumber).filter((v) => v !== null) as number[];
+    return nums.length >= 3 ? nums.slice(0, 3) : null;
+  }
+  if (typeof value === 'string' && value.includes(',')) {
+    const parts = value.split(',').map((p) => parseExifNumber(p));
+    const nums = parts.filter((v) => v !== null) as number[];
+    return nums.length >= 3 ? nums.slice(0, 3) : null;
+  }
+  return null;
+};
+
+const toDecimalDegrees = (dms: number[] | null) => {
+  if (!dms || dms.length < 3) return null;
+  const [d, m, s] = dms;
+  if (![d, m, s].every((v) => Number.isFinite(v))) return null;
+  return d + m / 60 + s / 3600;
+};
+
+const parseExifDate = (value: any): string | null => {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const normalized = trimmed.replace(
+      /^(\d{4}):(\d{2}):(\d{2})/,
+      '$1-$2-$3'
+    );
+    const date = new Date(normalized);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  return null;
+};
+
+const extractMetaFromAsset = (asset: ImagePicker.ImagePickerAsset): UploadMeta | null => {
+  const exif = (asset as any).exif as Record<string, any> | undefined;
+  const location = (asset as any).location as { latitude?: number; longitude?: number } | undefined;
+
+  let lat: number | null = null;
+  let lng: number | null = null;
+
+  if (exif) {
+    const latRef = typeof exif.GPSLatitudeRef === 'string' ? exif.GPSLatitudeRef : null;
+    const lngRef = typeof exif.GPSLongitudeRef === 'string' ? exif.GPSLongitudeRef : null;
+    const latDms = parseExifDms(exif.GPSLatitude);
+    const lngDms = parseExifDms(exif.GPSLongitude);
+
+    const latValue = toDecimalDegrees(latDms);
+    const lngValue = toDecimalDegrees(lngDms);
+
+    if (latValue !== null) {
+      lat = latRef && latRef.toUpperCase() === 'S' ? -latValue : latValue;
+    }
+    if (lngValue !== null) {
+      lng = lngRef && lngRef.toUpperCase() === 'W' ? -lngValue : lngValue;
+    }
+  }
+
+  if ((lat === null || lng === null) && location) {
+    if (typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+      lat = location.latitude;
+      lng = location.longitude;
+    }
+  }
+
+  const takenAt =
+    parseExifDate(exif?.DateTimeOriginal) ||
+    parseExifDate(exif?.DateTimeDigitized) ||
+    parseExifDate(exif?.DateTime) ||
+    null;
+
+  if (lat === null && lng === null && !takenAt) return null;
+
+  return {
+    lat,
+    lng,
+    taken_at: takenAt,
+  };
+};
+
+const resizeAndCompressAsset = async (
+  asset: ImagePicker.ImagePickerAsset,
+  rawName: string,
+  ext: string
+): Promise<UploadAsset> => {
+  const width = asset.width ?? 0;
+  const height = asset.height ?? 0;
+  const maxSide = Math.max(width, height);
+  const shouldResize = maxSide > MAX_IMAGE_DIMENSION;
+
+  const actions: ImageManipulator.Action[] = [];
+  if (shouldResize && width > 0 && height > 0) {
+    const scale = MAX_IMAGE_DIMENSION / maxSide;
+    actions.push({
+      resize: {
+        width: Math.round(width * scale),
+        height: Math.round(height * scale),
+      },
+    });
+  }
+
+  const usePng = ext === 'png';
+  const format = usePng ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
+  const outputExt = usePng ? 'png' : 'jpg';
+  const outputMime = usePng ? 'image/png' : 'image/jpeg';
+
+  const result = await ImageManipulator.manipulateAsync(asset.uri, actions, {
+    compress: JPEG_COMPRESS_QUALITY,
+    format,
+  });
+
+  return {
+    uri: result.uri,
+    name: ensureFileNameWithExt(rawName.replace(/\.\w+$/, ''), outputExt),
+    type: outputMime,
+  };
+};
+
 const prepareUploadAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<UploadAsset> => {
   const rawName = getAssetName(asset);
   const ext = getAssetExt(rawName);
   const mimeType = asset.mimeType || (ext ? `image/${ext}` : 'image/jpeg');
+  const meta = extractMetaFromAsset(asset);
 
-  if (isHeicAsset(asset, ext) && Platform.OS !== 'web') {
-    const result = await ImageManipulator.manipulateAsync(
-      asset.uri,
-      [],
-      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    const jpegName = rawName.replace(/\.(heic|heif)$/i, '.jpg');
+  try {
+  const resized = await resizeAndCompressAsset(asset, rawName, ext);
+    return { ...resized, meta };
+  } catch (error) {
+    if (isHeicAsset(asset, ext) && Platform.OS !== 'web') {
+      try {
+        const result = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [],
+          { compress: JPEG_COMPRESS_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        const jpegName = rawName.replace(/\.(heic|heif)$/i, '.jpg');
+        return {
+          uri: result.uri,
+          name: ensureFileNameWithExt(jpegName, 'jpg'),
+          type: 'image/jpeg',
+          meta,
+        };
+      } catch {
+        // fall through to original
+      }
+    }
     return {
-      uri: result.uri,
-      name: ensureFileNameWithExt(jpegName, 'jpg'),
-      type: 'image/jpeg',
+      uri: asset.uri,
+      name: ensureFileNameWithExt(rawName, ext),
+      type: mimeType,
+      meta,
     };
   }
-
-  return {
-    uri: asset.uri,
-    name: ensureFileNameWithExt(rawName, ext),
-    type: mimeType,
-  };
 };
 
 export default function UploadScreen() {
@@ -164,7 +333,8 @@ export default function UploadScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: PICKER_MEDIA_TYPES,
         allowsMultipleSelection: true,
-        quality: 0.8,
+        quality: 1,
+        exif: true,
         selectionLimit: Math.max(0, limits.max_photos - photos.length), // 최대 20장 제한
       });
 
@@ -262,6 +432,9 @@ export default function UploadScreen() {
           } as any);
         }
       }
+
+      const metaPayload = preparedAssets.map((asset) => asset.meta ?? null);
+      formData.append('metas', JSON.stringify(metaPayload));
 
       // 백엔드 API 호출
       const response = await api.postFormData<{
