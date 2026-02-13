@@ -6,6 +6,7 @@ import { api } from "./api";
 
 // 고정 일정 이벤트 타입
 export interface FixedEvent {
+  id?: string; // 좌표 기반 ID
   date: string; // "2026-02-07"
   title: string; // "점심 식사"
   start_time: string; // "12:00"
@@ -19,6 +20,7 @@ export interface FixedEvent {
 // 코스 생성 요청 타입
 // 선택된 장소 (개인 기록에서 선택)
 export interface SelectedPlace {
+  id?: string;
   name: string;
   address: string;
   category: string;
@@ -42,6 +44,7 @@ export interface CreateCourseRequest {
 
 // 장소 정보 타입
 export interface Place {
+  id?: string;
   name: string;
   category: string;
   category2: string;
@@ -145,6 +148,7 @@ export interface ReplaceSpotsRequest {
 
 // 대체 장소 타입
 export interface AlternativeSpot {
+  id?: string;
   name: string;
   category: string;
   category2?: string | null;
@@ -160,6 +164,7 @@ export interface ReplaceSpotsResponse {
 
 // 경로 재계산 요청용 장소 노드 타입
 export interface PlaceNode {
+  id?: string;
   name: string;
   category: string;
   category2?: string;
