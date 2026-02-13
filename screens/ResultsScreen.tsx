@@ -244,12 +244,17 @@ interface ParsedTransitStep {
 
 const parseTransitStep = (raw: string): ParsedTransitStep => {
   // 지연/정체/서행 정보 추출 [정체 +2분] 또는 [🟡서행]
-  const delayMatch = raw.match(/\[([^\]]*(?:지연|정체|서행)[^\]]*)\]\s*$/);
+  const delayMatch = raw.match(
+    /\[([^\]]*(?:지연|정체|서행|원활|여유|보통|혼잡|붐빔)[^\]]*)\]\s*$/,
+  );
   // 주차/도보 정보 추출 [주차/도보 +12분]
   const parkingMatch = raw.match(/\[주차\/도보\s*\+(\d+)\s*분\]/);
 
   let cleanRaw = raw
-    .replace(/\s*\[[^\]]*(?:지연|정체|서행)[^\]]*\]\s*$/, "")
+    .replace(
+      /\s*\[[^\]]*(?:지연|정체|서행|원활|여유|보통|혼잡|붐빔)[^\]]*\]\s*$/,
+      "",
+    )
     .trim();
   // 주차/도보 정보도 제거
   cleanRaw = cleanRaw.replace(/\s*\[주차\/도보\s*\+\d+\s*분\]/g, "").trim();
@@ -399,11 +404,15 @@ const parsePopulationLevel = (
   if (
     level.includes("🟢") ||
     cleaned.includes("여유") ||
-    cleaned.includes("보통")
+    cleaned.includes("원활")
   ) {
     return { text: cleaned, color: "#166534", bgColor: "#dcfce7" };
   }
-  if (level.includes("🟡") || cleaned.includes("약간")) {
+  if (
+    level.includes("🟡") ||
+    cleaned.includes("서행") ||
+    cleaned.includes("보통") // 여기가 제자리입니다.
+  ) {
     return { text: cleaned, color: "#a16207", bgColor: "#fef9c3" };
   }
   if (
@@ -517,208 +526,204 @@ function PlaceCard({
   const categoryIcon = getCategoryIcon(item.category);
 
   return (
-      <View
-        style={[
-          styles.placeCard,
-          isHovered && styles.placeCardHovered,
-          isEditMode && styles.placeCardEdit,
-          isEditMode && isSelected && styles.placeCardSelected,
-        ]}
-      >
-        {/* 체크박스 (편집 모드에서만 표시) */}
-        {isEditMode && (
-          <Pressable style={styles.editCheckboxArea} onPress={onToggleSelect}>
-            <View
-              style={[styles.checkbox, isSelected && styles.checkboxChecked]}
-            >
-              {isSelected && (
-                <Ionicons name="checkmark" size={14} color="#ffffff" />
-              )}
-            </View>
-          </Pressable>
-        )}
-
-        {/* 순서 마커 */}
-        <Pressable
-          style={[
-            styles.placeMarker,
-            {
-              backgroundColor: getCourseOrderColor(
-                item.population_level || item.traffic_level,
-              ),
-            },
-          ]}
-          onHoverIn={onHoverIn}
-          onHoverOut={onHoverOut}
-          onPress={onPress}
-        >
-          <Text style={styles.placeMarkerText}>{getOrderMarker(idx)}</Text>
-        </Pressable>
-
-        {/* 카드 내용 */}
-        <Pressable
-          style={styles.placeContent}
-          onHoverIn={onHoverIn}
-          onHoverOut={onHoverOut}
-          onPress={onPress}
-        >
-          <View style={styles.placeTimeRow}>
-            <Text style={styles.courseOrderLabel}>{idx + 1}번 코스</Text>
+    <View
+      style={[
+        styles.placeCard,
+        isHovered && styles.placeCardHovered,
+        isEditMode && styles.placeCardEdit,
+        isEditMode && isSelected && styles.placeCardSelected,
+      ]}
+    >
+      {/* 체크박스 (편집 모드에서만 표시) */}
+      {isEditMode && (
+        <Pressable style={styles.editCheckboxArea} onPress={onToggleSelect}>
+          <View style={[styles.checkbox, isSelected && styles.checkboxChecked]}>
+            {isSelected && (
+              <Ionicons name="checkmark" size={14} color="#ffffff" />
+            )}
           </View>
-          {startTime ? (
-            <View style={styles.placeTimeRow}>
-              <View style={styles.placeTimeMain}>
-                <Text style={styles.placeTime}>{startTime}</Text>
-                {endTime && (
-                  <>
-                    <Ionicons name="arrow-forward" size={12} color="#94a3b8" />
-                    <Text style={styles.placeTimeEnd}>{endTime}</Text>
-                  </>
-                )}
-              </View>
-              {extraLabel && extraColor && (
-                <View
-                  style={[
-                    styles.timeBadge,
-                    {
-                      backgroundColor: extraColor + "22",
-                      borderColor: extraColor,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.timeBadgeText, { color: extraColor }]}>
-                    {extraLabel}
-                  </Text>
-                </View>
+        </Pressable>
+      )}
+
+      {/* 순서 마커 */}
+      <Pressable
+        style={[
+          styles.placeMarker,
+          {
+            backgroundColor: getCourseOrderColor(
+              item.population_level || item.traffic_level,
+            ),
+          },
+        ]}
+        onHoverIn={onHoverIn}
+        onHoverOut={onHoverOut}
+        onPress={onPress}
+      >
+        <Text style={styles.placeMarkerText}>{getOrderMarker(idx)}</Text>
+      </Pressable>
+
+      {/* 카드 내용 */}
+      <Pressable
+        style={styles.placeContent}
+        onHoverIn={onHoverIn}
+        onHoverOut={onHoverOut}
+        onPress={onPress}
+      >
+        <View style={styles.placeTimeRow}>
+          <Text style={styles.courseOrderLabel}>{idx + 1}번 코스</Text>
+        </View>
+        {startTime ? (
+          <View style={styles.placeTimeRow}>
+            <View style={styles.placeTimeMain}>
+              <Text style={styles.placeTime}>{startTime}</Text>
+              {endTime && (
+                <>
+                  <Ionicons name="arrow-forward" size={12} color="#94a3b8" />
+                  <Text style={styles.placeTimeEnd}>{endTime}</Text>
+                </>
               )}
             </View>
-          ) : (
-            <View style={styles.placeTimeRow}>
-              <Text style={styles.placeTimeUndefined}>시간 미정</Text>
-            </View>
-          )}
-
-          <Text style={[styles.placeName, isEditMode && styles.placeNameEdit]}>
-            {item.name}
-          </Text>
-
-          {/* 카테고리 배지 (고정일정이 아닌 경우만 표시) */}
-          {item.category !== "고정일정" && (
-            <View style={styles.placeMetaRow}>
+            {extraLabel && extraColor && (
               <View
                 style={[
-                  styles.categoryBadge,
-                  { backgroundColor: categoryColors.bg },
+                  styles.timeBadge,
+                  {
+                    backgroundColor: extraColor + "22",
+                    borderColor: extraColor,
+                  },
                 ]}
               >
-                <Ionicons
-                  name={categoryIcon as any}
-                  size={12}
-                  color={categoryColors.text}
-                />
-                <Text
-                  style={[styles.categoryText, { color: categoryColors.text }]}
-                >
-                  {item.category}
+                <Text style={[styles.timeBadgeText, { color: extraColor }]}>
+                  {extraLabel}
                 </Text>
               </View>
-              {item.category2 ? (
-                <View
-                  style={[styles.categoryBadge, { backgroundColor: "#f1f5f9" }]}
-                >
-                  <Text style={[styles.categoryText, { color: "#475569" }]}>
-                    {item.category2}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          )}
-
-          {!isEditMode &&
-            (item.population_level ||
-              (item.traffic_level && item.traffic_level !== "-")) && (
-              <View style={styles.statusRow}>
-                {item.population_level &&
-                  (() => {
-                    const popInfo = parsePopulationLevel(item.population_level);
-                    return (
-                      <View
-                        style={[
-                          styles.statusBadge,
-                          { backgroundColor: popInfo.bgColor },
-                        ]}
-                      >
-                        <View
-                          style={[
-                            styles.statusDot,
-                            { backgroundColor: popInfo.color },
-                          ]}
-                        />
-                        <Text
-                          style={[styles.statusText, { color: popInfo.color }]}
-                        >
-                          {popInfo.text}
-                        </Text>
-                      </View>
-                    );
-                  })()}
-                {item.traffic_level &&
-                  item.traffic_level !== "-" &&
-                  (() => {
-                    const trafficInfo = parsePopulationLevel(
-                      item.traffic_level,
-                    );
-                    return (
-                      <View
-                        style={[
-                          styles.statusBadge,
-                          { backgroundColor: trafficInfo.bgColor },
-                        ]}
-                      >
-                        <Ionicons
-                          name="car"
-                          size={10}
-                          color={trafficInfo.color}
-                        />
-                        <Text
-                          style={[
-                            styles.statusText,
-                            { color: trafficInfo.color },
-                          ]}
-                        >
-                          {trafficInfo.text}
-                        </Text>
-                      </View>
-                    );
-                  })()}
-              </View>
             )}
-        </Pressable>
-
-        {/* 오른쪽 액션 버튼 영역 */}
-        {isEditMode ? (
-          <View style={{ marginLeft: 8 }}>
-            {/* 삭제 버튼 */}
-            <Pressable
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                backgroundColor: "#fef2f2",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-              onPress={onDelete}
-            >
-              <Ionicons name="trash-outline" size={16} color="#ef4444" />
-            </Pressable>
           </View>
         ) : (
-          <Pressable style={styles.detailButton}>
-            <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
-          </Pressable>
+          <View style={styles.placeTimeRow}>
+            <Text style={styles.placeTimeUndefined}>시간 미정</Text>
+          </View>
         )}
-      </View>
+
+        <Text style={[styles.placeName, isEditMode && styles.placeNameEdit]}>
+          {item.name}
+        </Text>
+
+        {/* 카테고리 배지 (고정일정이 아닌 경우만 표시) */}
+        {item.category !== "고정일정" && (
+          <View style={styles.placeMetaRow}>
+            <View
+              style={[
+                styles.categoryBadge,
+                { backgroundColor: categoryColors.bg },
+              ]}
+            >
+              <Ionicons
+                name={categoryIcon as any}
+                size={12}
+                color={categoryColors.text}
+              />
+              <Text
+                style={[styles.categoryText, { color: categoryColors.text }]}
+              >
+                {item.category}
+              </Text>
+            </View>
+            {item.category2 ? (
+              <View
+                style={[styles.categoryBadge, { backgroundColor: "#f1f5f9" }]}
+              >
+                <Text style={[styles.categoryText, { color: "#475569" }]}>
+                  {item.category2}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+
+        {!isEditMode &&
+          (item.population_level ||
+            (item.traffic_level && item.traffic_level !== "-")) && (
+            <View style={styles.statusRow}>
+              {item.population_level &&
+                (() => {
+                  const popInfo = parsePopulationLevel(item.population_level);
+                  return (
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        { backgroundColor: popInfo.bgColor },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.statusDot,
+                          { backgroundColor: popInfo.color },
+                        ]}
+                      />
+                      <Text
+                        style={[styles.statusText, { color: popInfo.color }]}
+                      >
+                        {popInfo.text}
+                      </Text>
+                    </View>
+                  );
+                })()}
+              {item.traffic_level &&
+                item.traffic_level !== "-" &&
+                (() => {
+                  const trafficInfo = parsePopulationLevel(item.traffic_level);
+                  return (
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        { backgroundColor: trafficInfo.bgColor },
+                      ]}
+                    >
+                      <Ionicons
+                        name="car"
+                        size={10}
+                        color={trafficInfo.color}
+                      />
+                      <Text
+                        style={[
+                          styles.statusText,
+                          { color: trafficInfo.color },
+                        ]}
+                      >
+                        {trafficInfo.text}
+                      </Text>
+                    </View>
+                  );
+                })()}
+            </View>
+          )}
+      </Pressable>
+
+      {/* 오른쪽 액션 버튼 영역 */}
+      {isEditMode ? (
+        <View style={{ marginLeft: 8 }}>
+          {/* 삭제 버튼 */}
+          <Pressable
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              backgroundColor: "#fef2f2",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            onPress={onDelete}
+          >
+            <Ionicons name="trash-outline" size={16} color="#ef4444" />
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable style={styles.detailButton}>
+          <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+        </Pressable>
+      )}
+    </View>
   );
 }
 
@@ -885,7 +890,8 @@ export default function ResultsScreen() {
 
       // 서버 응답 결과로 최종 상태 업데이트
       const finalPlan = deepClone(editedPlan);
-      finalPlan.variants[activeDay].route = response.route as unknown as RouteItem[];
+      finalPlan.variants[activeDay].route =
+        response.route as unknown as RouteItem[];
       finalPlan.variants[activeDay].timelines = response.timelines;
 
       setLastGeneratedPlan(finalPlan); // 전역 상태 갱신
@@ -1743,355 +1749,340 @@ export default function ResultsScreen() {
             style={styles.timelineScroll}
             showsVerticalScrollIndicator={false}
           >
-                <View style={styles.timelineContainer}>
-                  {timeline.map((item, idx) => {
-                    const travelInfo =
-                      idx > 0 ||
-                      (item.transit_to_here?.length > 0 &&
-                        item.category !== "고정일정")
-                        ? extractTravelInfo(item.transit_to_here)
-                        : null;
-                    const isHovered = hoveredItem === idx;
-                    const isTransitExpanded = expandedTransit === idx;
+            <View style={styles.timelineContainer}>
+              {timeline.map((item, idx) => {
+                const travelInfo =
+                  idx > 0 ||
+                  (item.transit_to_here?.length > 0 &&
+                    item.category !== "고정일정")
+                    ? extractTravelInfo(item.transit_to_here)
+                    : null;
+                const isHovered = hoveredItem === idx;
+                const isTransitExpanded = expandedTransit === idx;
 
-                    return (
-                      <View key={`place-${idx}`}>
-                        {/* 이동 구간 (transit_to_here 데이터가 있으면 표시, 편집 모드가 아닐 때만) */}
-                        {travelInfo && !isEditMode && (
-                          <Pressable
-                            style={styles.travelSection}
-                            onPress={() =>
-                              setExpandedTransit(isTransitExpanded ? null : idx)
-                            }
-                          >
-                            <View style={styles.travelLine}>
-                              <View style={styles.travelDot} />
-                              <View style={styles.travelLineDash} />
-                              <View style={styles.travelDot} />
-                            </View>
-                            <View style={styles.travelInfo}>
-                              <View style={styles.travelBadge}>
-                                <Ionicons
-                                  name={
-                                    travelInfo.mode === "walk"
-                                      ? "walk"
-                                      : travelInfo.mode === "wait"
-                                        ? "time"
-                                        : travelInfo.mode === "car"
-                                          ? "car"
-                                          : travelInfo.mode === "transit"
-                                            ? "bus"
-                                            : "bus"
-                                  }
-                                  size={14}
-                                  color="#6366f1"
-                                />
-                                {travelInfo.distance && (
-                                  <Text style={styles.travelDistance}>
-                                    {travelInfo.distance}
-                                  </Text>
-                                )}
-                                {travelInfo.duration && (
-                                  <Text style={styles.travelDuration}>
-                                    {travelInfo.duration}
-                                  </Text>
-                                )}
-                              </View>
-                              {item.transit_to_here.length > 0 && (
-                                <Ionicons
-                                  name={
-                                    isTransitExpanded
-                                      ? "chevron-up"
-                                      : "chevron-down"
-                                  }
-                                  size={16}
-                                  color="#94a3b8"
-                                />
-                              )}
-                            </View>
-                          </Pressable>
-                        )}
+                return (
+                  <View key={`place-${idx}`}>
+                    {/* 이동 구간 (transit_to_here 데이터가 있으면 표시, 편집 모드가 아닐 때만) */}
+                    {travelInfo && !isEditMode && (
+                      <Pressable
+                        style={styles.travelSection}
+                        onPress={() =>
+                          setExpandedTransit(isTransitExpanded ? null : idx)
+                        }
+                      >
+                        <View style={styles.travelLine}>
+                          <View style={styles.travelDot} />
+                          <View style={styles.travelLineDash} />
+                          <View style={styles.travelDot} />
+                        </View>
+                        <View style={styles.travelInfo}>
+                          <View style={styles.travelBadge}>
+                            <Ionicons
+                              name={
+                                travelInfo.mode === "walk"
+                                  ? "walk"
+                                  : travelInfo.mode === "wait"
+                                    ? "time"
+                                    : travelInfo.mode === "car"
+                                      ? "car"
+                                      : travelInfo.mode === "transit"
+                                        ? "bus"
+                                        : "bus"
+                              }
+                              size={14}
+                              color="#6366f1"
+                            />
+                            {travelInfo.distance && (
+                              <Text style={styles.travelDistance}>
+                                {travelInfo.distance}
+                              </Text>
+                            )}
+                            {travelInfo.duration && (
+                              <Text style={styles.travelDuration}>
+                                {travelInfo.duration}
+                              </Text>
+                            )}
+                          </View>
+                          {item.transit_to_here.length > 0 && (
+                            <Ionicons
+                              name={
+                                isTransitExpanded
+                                  ? "chevron-up"
+                                  : "chevron-down"
+                              }
+                              size={16}
+                              color="#94a3b8"
+                            />
+                          )}
+                        </View>
+                      </Pressable>
+                    )}
 
-                        {/* 이동 상세 (펼침) - 새 디자인 */}
-                        {isTransitExpanded &&
-                          item.transit_to_here.length > 0 &&
-                          !isEditMode && (
-                            <View style={styles.transitCard}>
-                              {/* 헤더: 총 소요시간 */}
-                              <View style={styles.transitCardHeader}>
-                                <View style={styles.transitCardHeaderLeft}>
-                                  <Ionicons
-                                    name="swap-vertical"
-                                    size={16}
-                                    color="#6366f1"
-                                  />
-                                  <Text style={styles.transitCardHeaderText}>
-                                    이동 경로
-                                  </Text>
-                                </View>
-                                <View style={styles.transitCardHeaderRight}>
-                                  <Text style={styles.transitCardTotalTime}>
-                                    총{" "}
-                                    {calculateTotalTransitTime(
-                                      item.transit_to_here,
+                    {/* 이동 상세 (펼침) - 새 디자인 */}
+                    {isTransitExpanded &&
+                      item.transit_to_here.length > 0 &&
+                      !isEditMode && (
+                        <View style={styles.transitCard}>
+                          {/* 헤더: 총 소요시간 */}
+                          <View style={styles.transitCardHeader}>
+                            <View style={styles.transitCardHeaderLeft}>
+                              <Ionicons
+                                name="swap-vertical"
+                                size={16}
+                                color="#6366f1"
+                              />
+                              <Text style={styles.transitCardHeaderText}>
+                                이동 경로
+                              </Text>
+                            </View>
+                            <View style={styles.transitCardHeaderRight}>
+                              <Text style={styles.transitCardTotalTime}>
+                                총{" "}
+                                {calculateTotalTransitTime(
+                                  item.transit_to_here,
+                                )}
+                              </Text>
+                            </View>
+                          </View>
+
+                          {/* 타임라인 */}
+                          <View style={styles.transitTimeline}>
+                            {item.transit_to_here.map((t, i) => {
+                              const step = parseTransitStep(t);
+                              const isLast =
+                                i === item.transit_to_here.length - 1;
+
+                              // 아이콘 설정
+                              let iconName: keyof typeof Ionicons.glyphMap =
+                                "ellipse";
+                              let iconBg = "#e5e7eb";
+                              let iconColor = "#64748b";
+                              let accentColor = "#64748b";
+
+                              if (step.type === "walk") {
+                                iconName = "walk";
+                                iconBg = "#dbeafe";
+                                iconColor = "#2563eb";
+                                accentColor = "#2563eb";
+                              } else if (step.type === "bus") {
+                                iconName = "bus";
+                                iconBg = "#fef3c7";
+                                iconColor = "#d97706";
+                                accentColor = "#d97706";
+                              } else if (step.type === "subway") {
+                                iconName = "subway";
+                                iconBg = "#d1fae5";
+                                iconColor = "#059669";
+                                accentColor = "#059669";
+                              } else if (step.type === "wait") {
+                                iconName = "time";
+                                iconBg = "#ede9fe";
+                                iconColor = "#7c3aed";
+                                accentColor = "#7c3aed";
+                              } else if (step.type === "car") {
+                                iconName = "car";
+                                iconBg = "#fce7f3";
+                                iconColor = "#be185d";
+                                accentColor = "#be185d";
+                              }
+
+                              return (
+                                <View key={i} style={styles.transitStep}>
+                                  {/* 타임라인 좌측 (점 + 선) */}
+                                  <View style={styles.transitStepLeft}>
+                                    <View
+                                      style={[
+                                        styles.transitStepDot,
+                                        {
+                                          backgroundColor: iconBg,
+                                          borderColor: accentColor,
+                                        },
+                                      ]}
+                                    >
+                                      <Ionicons
+                                        name={iconName}
+                                        size={14}
+                                        color={iconColor}
+                                      />
+                                    </View>
+                                    {!isLast && (
+                                      <View
+                                        style={[
+                                          styles.transitStepLine,
+                                          {
+                                            backgroundColor: accentColor + "40",
+                                          },
+                                        ]}
+                                      />
                                     )}
-                                  </Text>
-                                </View>
-                              </View>
+                                  </View>
 
-                              {/* 타임라인 */}
-                              <View style={styles.transitTimeline}>
-                                {item.transit_to_here.map((t, i) => {
-                                  const step = parseTransitStep(t);
-                                  const isLast =
-                                    i === item.transit_to_here.length - 1;
-
-                                  // 아이콘 설정
-                                  let iconName: keyof typeof Ionicons.glyphMap =
-                                    "ellipse";
-                                  let iconBg = "#e5e7eb";
-                                  let iconColor = "#64748b";
-                                  let accentColor = "#64748b";
-
-                                  if (step.type === "walk") {
-                                    iconName = "walk";
-                                    iconBg = "#dbeafe";
-                                    iconColor = "#2563eb";
-                                    accentColor = "#2563eb";
-                                  } else if (step.type === "bus") {
-                                    iconName = "bus";
-                                    iconBg = "#fef3c7";
-                                    iconColor = "#d97706";
-                                    accentColor = "#d97706";
-                                  } else if (step.type === "subway") {
-                                    iconName = "subway";
-                                    iconBg = "#d1fae5";
-                                    iconColor = "#059669";
-                                    accentColor = "#059669";
-                                  } else if (step.type === "wait") {
-                                    iconName = "time";
-                                    iconBg = "#ede9fe";
-                                    iconColor = "#7c3aed";
-                                    accentColor = "#7c3aed";
-                                  } else if (step.type === "car") {
-                                    iconName = "car";
-                                    iconBg = "#fce7f3";
-                                    iconColor = "#be185d";
-                                    accentColor = "#be185d";
-                                  }
-
-                                  return (
-                                    <View key={i} style={styles.transitStep}>
-                                      {/* 타임라인 좌측 (점 + 선) */}
-                                      <View style={styles.transitStepLeft}>
+                                  {/* 타임라인 우측 (정보) */}
+                                  <View style={styles.transitStepRight}>
+                                    <View style={styles.transitStepHeader}>
+                                      <Text
+                                        style={[
+                                          styles.transitStepType,
+                                          { color: accentColor },
+                                        ]}
+                                      >
+                                        {step.type === "walk"
+                                          ? "도보"
+                                          : step.type === "bus"
+                                            ? "버스"
+                                            : step.type === "subway"
+                                              ? "지하철"
+                                              : step.type === "wait"
+                                                ? step.rawText.includes("여유")
+                                                  ? "출발 전 여유"
+                                                  : step.rawText.includes(
+                                                        "현장",
+                                                      )
+                                                    ? "현장 대기"
+                                                    : "대기"
+                                                : step.type === "car"
+                                                  ? "승용차"
+                                                  : "이동"}
+                                      </Text>
+                                      {step.duration && (
+                                        <Text
+                                          style={styles.transitStepDuration}
+                                        >
+                                          {step.duration}
+                                        </Text>
+                                      )}
+                                      {step.delayText && step.delayColor && (
                                         <View
                                           style={[
-                                            styles.transitStepDot,
+                                            styles.transitDelayBadge,
                                             {
-                                              backgroundColor: iconBg,
-                                              borderColor: accentColor,
+                                              backgroundColor:
+                                                step.delayColor + "20",
+                                              borderColor: step.delayColor,
                                             },
                                           ]}
                                         >
                                           <Ionicons
-                                            name={iconName}
-                                            size={14}
-                                            color={iconColor}
+                                            name="warning"
+                                            size={10}
+                                            color={step.delayColor}
                                           />
-                                        </View>
-                                        {!isLast && (
-                                          <View
-                                            style={[
-                                              styles.transitStepLine,
-                                              {
-                                                backgroundColor:
-                                                  accentColor + "40",
-                                              },
-                                            ]}
-                                          />
-                                        )}
-                                      </View>
-
-                                      {/* 타임라인 우측 (정보) */}
-                                      <View style={styles.transitStepRight}>
-                                        <View style={styles.transitStepHeader}>
                                           <Text
                                             style={[
-                                              styles.transitStepType,
-                                              { color: accentColor },
+                                              styles.transitDelayText,
+                                              { color: step.delayColor },
                                             ]}
                                           >
-                                            {step.type === "walk"
-                                              ? "도보"
-                                              : step.type === "bus"
-                                                ? "버스"
-                                                : step.type === "subway"
-                                                  ? "지하철"
-                                                  : step.type === "wait"
-                                                    ? step.rawText.includes(
-                                                        "여유",
-                                                      )
-                                                      ? "출발 전 여유"
-                                                      : step.rawText.includes(
-                                                            "현장",
-                                                          )
-                                                        ? "현장 대기"
-                                                        : "대기"
-                                                    : step.type === "car"
-                                                      ? "승용차"
-                                                      : "이동"}
+                                            {step.delayText}
                                           </Text>
-                                          {step.duration && (
-                                            <Text
-                                              style={styles.transitStepDuration}
-                                            >
-                                              {step.duration}
-                                            </Text>
-                                          )}
-                                          {step.delayText &&
-                                            step.delayColor && (
-                                              <View
-                                                style={[
-                                                  styles.transitDelayBadge,
-                                                  {
-                                                    backgroundColor:
-                                                      step.delayColor + "20",
-                                                    borderColor:
-                                                      step.delayColor,
-                                                  },
-                                                ]}
-                                              >
-                                                <Ionicons
-                                                  name="warning"
-                                                  size={10}
-                                                  color={step.delayColor}
-                                                />
-                                                <Text
-                                                  style={[
-                                                    styles.transitDelayText,
-                                                    { color: step.delayColor },
-                                                  ]}
-                                                >
-                                                  {step.delayText}
-                                                </Text>
-                                              </View>
-                                            )}
                                         </View>
+                                      )}
+                                    </View>
 
-                                        {/* 버스/지하철 노선 정보 */}
-                                        {step.routes.length > 0 && (
-                                          <View style={styles.transitRoutes}>
-                                            {step.routes.map((route, ri) => (
-                                              <View
-                                                key={ri}
-                                                style={[
-                                                  styles.transitRouteBadge,
-                                                  {
-                                                    backgroundColor:
-                                                      step.type === "subway"
-                                                        ? "#d1fae5"
-                                                        : "#fef3c7",
-                                                  },
-                                                ]}
-                                              >
-                                                <Text
-                                                  style={[
-                                                    styles.transitRouteText,
-                                                    {
-                                                      color:
-                                                        step.type === "subway"
-                                                          ? "#059669"
-                                                          : "#d97706",
-                                                    },
-                                                  ]}
-                                                >
-                                                  {route}
-                                                </Text>
-                                              </View>
-                                            ))}
+                                    {/* 버스/지하철 노선 정보 */}
+                                    {step.routes.length > 0 && (
+                                      <View style={styles.transitRoutes}>
+                                        {step.routes.map((route, ri) => (
+                                          <View
+                                            key={ri}
+                                            style={[
+                                              styles.transitRouteBadge,
+                                              {
+                                                backgroundColor:
+                                                  step.type === "subway"
+                                                    ? "#d1fae5"
+                                                    : "#fef3c7",
+                                              },
+                                            ]}
+                                          >
+                                            <Text
+                                              style={[
+                                                styles.transitRouteText,
+                                                {
+                                                  color:
+                                                    step.type === "subway"
+                                                      ? "#059669"
+                                                      : "#d97706",
+                                                },
+                                              ]}
+                                            >
+                                              {route}
+                                            </Text>
                                           </View>
+                                        ))}
+                                      </View>
+                                    )}
+
+                                    {/* 정류장 정보 */}
+                                    {(step.fromStation || step.toStation) && (
+                                      <View style={styles.transitStations}>
+                                        {step.fromStation && (
+                                          <Text
+                                            style={styles.transitStationText}
+                                          >
+                                            {step.fromStation}
+                                          </Text>
                                         )}
-
-                                        {/* 정류장 정보 */}
-                                        {(step.fromStation ||
-                                          step.toStation) && (
-                                          <View style={styles.transitStations}>
-                                            {step.fromStation && (
-                                              <Text
-                                                style={
-                                                  styles.transitStationText
-                                                }
-                                              >
-                                                {step.fromStation}
-                                              </Text>
-                                            )}
-                                            {step.fromStation &&
-                                              step.toStation && (
-                                                <Ionicons
-                                                  name="arrow-forward"
-                                                  size={12}
-                                                  color="#94a3b8"
-                                                  style={{
-                                                    marginHorizontal: 6,
-                                                  }}
-                                                />
-                                              )}
-                                            {step.toStation && (
-                                              <Text
-                                                style={
-                                                  styles.transitStationText
-                                                }
-                                              >
-                                                {step.toStation}
-                                              </Text>
-                                            )}
-                                          </View>
+                                        {step.fromStation && step.toStation && (
+                                          <Ionicons
+                                            name="arrow-forward"
+                                            size={12}
+                                            color="#94a3b8"
+                                            style={{
+                                              marginHorizontal: 6,
+                                            }}
+                                          />
+                                        )}
+                                        {step.toStation && (
+                                          <Text
+                                            style={styles.transitStationText}
+                                          >
+                                            {step.toStation}
+                                          </Text>
                                         )}
                                       </View>
-                                    </View>
-                                  );
-                                })}
-                              </View>
-                            </View>
-                          )}
+                                    )}
+                                  </View>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      )}
 
-                        {/* 장소 카드 */}
-                        <PlaceCard
-                          item={item}
-                          idx={idx}
-                          isEditMode={isEditMode}
-                          isHovered={isHovered}
-                          isSelected={selectedSpots.has(item.name)}
-                          onHoverIn={() => setHoveredItem(idx)}
-                          onHoverOut={() => setHoveredItem(null)}
-                          onPress={() => zoomToLocation(idx)}
-                          onDelete={() => deletePlace(activeDay, idx)}
-                          onToggleSelect={() => toggleSpotSelection(item.name)}
-                        />
-                      </View>
-                    );
-                  })}
-                </View>
-
-                {/* 여행 요약 */}
-                <View style={styles.tripSummary}>
-                  <View style={styles.summaryCard}>
-                    <Ionicons
-                      name="information-circle"
-                      size={20}
-                      color="#6366f1"
+                    {/* 장소 카드 */}
+                    <PlaceCard
+                      item={item}
+                      idx={idx}
+                      isEditMode={isEditMode}
+                      isHovered={isHovered}
+                      isSelected={selectedSpots.has(item.name)}
+                      onHoverIn={() => setHoveredItem(idx)}
+                      onHoverOut={() => setHoveredItem(null)}
+                      onPress={() => zoomToLocation(idx)}
+                      onDelete={() => deletePlace(activeDay, idx)}
+                      onToggleSelect={() => toggleSpotSelection(item.name)}
                     />
-                    <View style={styles.summaryContent}>
-                      <Text style={styles.summaryTitle}>여행 정보</Text>
-                      <Text style={styles.summaryText}>
-                        {planData.summary.transport_mode === "walkAndPublic"
-                          ? "도보 + 대중교통"
-                          : "자가용"}{" "}
-                        이용 · 총 {timeline.length}개 장소 방문
-                      </Text>
-                    </View>
                   </View>
+                );
+              })}
+            </View>
+
+            {/* 여행 요약 */}
+            <View style={styles.tripSummary}>
+              <View style={styles.summaryCard}>
+                <Ionicons name="information-circle" size={20} color="#6366f1" />
+                <View style={styles.summaryContent}>
+                  <Text style={styles.summaryTitle}>여행 정보</Text>
+                  <Text style={styles.summaryText}>
+                    {planData.summary.transport_mode === "walkAndPublic"
+                      ? "도보 + 대중교통"
+                      : "자가용"}{" "}
+                    이용 · 총 {timeline.length}개 장소 방문
+                  </Text>
                 </View>
+              </View>
+            </View>
           </ScrollView>
         </View>
 
