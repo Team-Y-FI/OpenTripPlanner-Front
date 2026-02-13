@@ -24,7 +24,7 @@ const resolveStorageUrl = (url?: string | null) => {
 };
 
 const formatDate = (value?: string | null) => {
-  if (!value) return '날짜 없음';
+  if (!value) return '방문 예정';
   try {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
@@ -631,10 +631,7 @@ export default function HomeScreen() {
                   ) : (
                     <View style={styles.statRow}>
                       <Text style={styles.statLabel}>혼잡 구간 경고</Text>
-                      <View style={styles.warningBadge}>
-                        <View style={styles.warningDot} />
-                        <Text style={styles.warningText}>1곳</Text>
-                      </View>
+                      <Text style={styles.statValue}>정보 없음</Text>
                     </View>
                   )}
                 </View>

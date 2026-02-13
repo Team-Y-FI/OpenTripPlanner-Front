@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Image, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Image, ActivityIndicator, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -20,7 +20,7 @@ const resolveStorageUrl = (url?: string | null) => {
 };
 
 const formatDate = (value?: string | null) => {
-  if (!value) return '날짜 없음';
+  if (!value) return '방문 예정';
   try {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
@@ -182,9 +182,25 @@ export default function RecordsScreen() {
     }
   }, [openingPlanId, router, setLastGeneratedPlan]);
 
-  const handleDeleteSelected = () => {
-    console.log(selectedSpotIds);
-    
+  const confirmDelete = (count: number) => {
+    const message = `${count}개 스팟을 삭제할까요?`;
+    if (Platform.OS === 'web') {
+      return Promise.resolve(typeof window !== 'undefined' ? window.confirm(message) : false);
+    }
+    return new Promise<boolean>((resolve) => {
+      Alert.alert(
+        '선택 삭제',
+        message,
+        [
+          { text: '취소', style: 'cancel', onPress: () => resolve(false) },
+          { text: '삭제', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
+  };
+
+  const handleDeleteSelected = async () => {
     const ids = Array.from(selectedSpotIds);
     if (ids.length === 0) {
       Toast.show({
@@ -195,35 +211,40 @@ export default function RecordsScreen() {
       return;
     }
 
-    Alert.alert('선택 삭제', `${ids.length}개 스팟을 삭제할까요?`, [
-      { text: '취소', style: 'cancel' },
-      {
-        text: '삭제',
-        style: 'destructive',
-        onPress: async () => {
-          setIsDeleting(true);
-          try {
-            await Promise.all(ids.map((id) => recordService.deleteSpot(id)));
-            setSelectedSpotIds(new Set());
-            await loadSpots();
-            Toast.show({
-              type: 'success',
-              text1: '삭제 완료',
-              text2: `${ids.length}개 스팟을 삭제했습니다.`,
-            });
-          } catch (error) {
-            console.error('삭제 실패:', error);
-            Toast.show({
-              type: 'error',
-              text1: '삭제 실패',
-              text2: '스팟 삭제 중 오류가 발생했습니다.',
-            });
-          } finally {
-            setIsDeleting(false);
-          }
-        },
-      },
-    ]);
+    const confirmed = await confirmDelete(ids.length);
+    if (!confirmed) return;
+
+    setIsDeleting(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => recordService.deleteSpot(id)));
+      const failed = results.filter((r) => r.status === 'rejected');
+
+      setSelectedSpotIds(new Set());
+      await loadSpots();
+
+      if (failed.length > 0) {
+        Toast.show({
+          type: 'error',
+          text1: '일부 삭제 실패',
+          text2: `${failed.length}개 스팟 삭제 중 오류가 발생했습니다.`,
+        });
+      } else {
+        Toast.show({
+          type: 'success',
+          text1: '삭제 완료',
+          text2: `${ids.length}개 스팟을 삭제했습니다.`,
+        });
+      }
+    } catch (error) {
+      console.error('삭제 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '삭제 실패',
+        text2: '스팟 삭제 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   return (

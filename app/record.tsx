@@ -6,6 +6,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { API_URL, recordService, type SpotDetail } from '@/services';
+import SpotMap from '@/components/SpotMap';
 
 const { width } = Dimensions.get('window');
 const STORAGE_BASE = API_URL.replace(/\/otp\/?$/, '');
@@ -18,7 +19,7 @@ const resolveStorageUrl = (url?: string | null) => {
 };
 
 const formatDate = (value?: string | null) => {
-  if (!value) return '날짜 없음';
+  if (!value) return '';
   try {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
@@ -26,6 +27,12 @@ const formatDate = (value?: string | null) => {
   } catch {
     return value;
   }
+};
+
+const formatVisitLabel = (value?: string | null) => {
+  if (!value) return '방문 예정';
+  const dateText = formatDate(value);
+  return dateText ? `${dateText} 방문` : '방문 예정';
 };
 
 export default function RecordScreen() {
@@ -149,7 +156,7 @@ export default function RecordScreen() {
               <Text style={styles.summaryTag}>내 지도 스팟</Text>
               <Text style={styles.summaryTitle}>{spot.place.name}</Text>
               <Text style={styles.summaryAddress}>{spot.place.address || '주소 없음'}</Text>
-              <Text style={styles.summaryDate}>{formatDate(spot.visited_at)} 방문</Text>
+              <Text style={styles.summaryDate}>{formatVisitLabel(spot.visited_at)}</Text>
               <View style={styles.tags}>
                 <View style={styles.tag}>
                   <Text style={styles.tagText}>{spot.place.category || '기타'}</Text>
@@ -207,6 +214,19 @@ export default function RecordScreen() {
               <Text style={styles.memoText}>{spot.memo || '메모가 없습니다.'}</Text>
             )}
           </View>
+
+          {/* 위치 지도 */}
+          {spot.place.lat && spot.place.lng && (
+            <View style={styles.section}>
+              <Text style={styles.cardTitle}>위치</Text>
+              <SpotMap
+                lat={spot.place.lat}
+                lng={spot.place.lng}
+                name={spot.place.name}
+                address={spot.place.address || undefined}
+              />
+            </View>
+          )}
 
           {/* 관련 플랜 */}
           <View style={styles.section}>

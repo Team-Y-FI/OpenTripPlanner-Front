@@ -1,16 +1,17 @@
 ﻿import { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Dimensions, Modal, TextInput, Image, Platform, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { api, metaService, recordService, API_URL } from '@/services';
+import { api, metaService, recordService, utilsService, API_URL } from '@/services';
 import Toast from 'react-native-toast-message';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSession } from '@/contexts/SessionContext';
 import FullScreenLoader from '@/components/FullScreenLoader';
+import PlacePickerMap from '@/components/PlacePickerMap';
 
 const { width } = Dimensions.get('window');
 
@@ -26,8 +27,8 @@ const resolveStorageUrl = (url?: string | null) => {
 const PICKER_MEDIA_TYPES: ImagePicker.MediaType[] = ['images'];
 
 interface ExifData {
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   taken_at: string | null;
 }
 
@@ -51,7 +52,19 @@ type UploadAsset = {
   uri: string;
   name: string;
   type: string;
+  meta?: UploadMeta | null;
 };
+
+type UploadMeta = {
+  lat?: number | null;
+  lng?: number | null;
+  taken_at?: string | null;
+};
+
+type VisitType = 'visited' | 'planned';
+
+const MAX_IMAGE_DIMENSION = 1600;
+const JPEG_COMPRESS_QUALITY = 0.75;
 
 const DEFAULT_LIMITS: UploadLimits = {
   max_photos: 20,
@@ -59,7 +72,51 @@ const DEFAULT_LIMITS: UploadLimits = {
   allowed_exts: ["jpg", "jpeg", "png", "webp", "heic", "heif"],
 };
 
-const DEFAULT_PLACE_CATEGORIES = ["카페", "맛집", "전시", "공원", "야경", "쇼핑"];
+const ensureEtcCategory = (items: string[]) =>
+  items.includes('기타') ? items : [...items, '기타'];
+
+const DEFAULT_PLACE_CATEGORIES = ensureEtcCategory(["카페", "맛집", "전시", "공원", "야경", "쇼핑"]);
+
+const webDateInputBaseStyle: any = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  backgroundColor: '#f8fafc',
+  border: '1px solid #e2e8f0',
+  borderRadius: 14,
+  padding: '12px 14px',
+  fontSize: 14,
+  color: '#0f172a',
+};
+
+function WebDateInput({
+  value,
+  onChange,
+  disabled,
+  hasError,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  hasError?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type="date"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={disabled}
+      placeholder={placeholder}
+      style={{
+        ...webDateInputBaseStyle,
+        ...(hasError ? { border: '2px solid #ef4444' } : {}),
+      }}
+    />
+  );
+}
 interface PhotoData {
   photo_id: string;
   file_name: string;
@@ -68,6 +125,8 @@ interface PhotoData {
   place: PlaceData | null;
   thumbnail_url: string | null;
   memo?: string | null;
+  visit_type?: VisitType;
+  visit_date?: string | null;
   editingPlace?: boolean; // 장소 수정 중인지 여부
 }
 
@@ -87,30 +146,331 @@ const ensureFileNameWithExt = (name: string, ext: string) => {
   return `${name}.${fallback}`;
 };
 
+const pickString = (...values: any[]): string | null => {
+  for (const v of values) {
+    if (typeof v === 'string') return v;
+  }
+  return null;
+};
+
+const coerceNumber = (value: any): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.includes('/')) {
+      const [n, d] = trimmed.split('/');
+      const num = Number(n);
+      const den = Number(d);
+      if (Number.isFinite(num) && Number.isFinite(den) && den !== 0) return num / den;
+      return null;
+    }
+    const num = Number(trimmed);
+    return Number.isFinite(num) ? num : null;
+  }
+  return null;
+};
+
+const parseRational = (num: any, den: any): number | null => {
+  const n = coerceNumber(num);
+  const d = coerceNumber(den);
+  if (n === null || d === null || d === 0) return null;
+  const out = n / d;
+  return Number.isFinite(out) ? out : null;
+};
+
+const parseExifNumber = (value: any): number | null => {
+  const direct = coerceNumber(value);
+  if (direct !== null) return direct;
+  if (value && typeof value === 'object') {
+    const inner = coerceNumber((value as any).value);
+    if (inner !== null) return inner;
+    const frac = parseRational(
+      (value as any).numerator ?? (value as any).num,
+      (value as any).denominator ?? (value as any).den
+    );
+    if (frac !== null) return frac;
+  }
+  return null;
+};
+
+const parseExifDms = (value: any): number[] | null => {
+  if (Array.isArray(value)) {
+    const nums = value.map(parseExifNumber).filter((v) => v !== null) as number[];
+    return nums.length >= 3 ? nums.slice(0, 3) : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const rawParts = trimmed.includes(',')
+      ? trimmed.split(',')
+      : trimmed.replace(/[^\d.+-]+/g, ' ').trim().split(/\s+/);
+    const nums = rawParts.map((p) => parseExifNumber(p)).filter((v) => v !== null) as number[];
+    return nums.length >= 3 ? nums.slice(0, 3) : null;
+  }
+  const single = parseExifNumber(value);
+  if (single !== null) return [single, 0, 0];
+  return null;
+};
+
+const toDecimalDegrees = (dms: number[] | null) => {
+  if (!dms || dms.length < 3) return null;
+  const [d, m, s] = dms;
+  if (![d, m, s].every((v) => Number.isFinite(v))) return null;
+  return d + m / 60 + s / 3600;
+};
+
+const isZeroLatLng = (lat?: number | null, lng?: number | null) =>
+  lat === 0 && lng === 0;
+
+const normalizeLatLng = (lat?: number | null, lng?: number | null) => {
+  if (isZeroLatLng(lat, lng)) return { lat: null, lng: null };
+  return { lat: lat ?? null, lng: lng ?? null };
+};
+
+const hasAnyExif = (exif?: ExifData | null) => {
+  const hasLatLng =
+    exif?.lat != null &&
+    exif?.lng != null &&
+    !isZeroLatLng(exif.lat, exif.lng);
+  return hasLatLng || !!exif?.taken_at;
+};
+
+const parseExifDate = (value: any): string | null => {
+  if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString();
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const normalized = trimmed.replace(
+      /^(\d{4}):(\d{2}):(\d{2})/,
+      '$1-$2-$3'
+    );
+    const date = new Date(normalized);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  return null;
+};
+
+const extractMetaFromAsset = (asset: ImagePicker.ImagePickerAsset): UploadMeta | null => {
+  const exif = (asset as any).exif as Record<string, any> | undefined;
+  const location = (asset as any).location as { latitude?: number; longitude?: number } | undefined;
+
+  let lat: number | null = null;
+  let lng: number | null = null;
+
+  if (exif) {
+    const latRef = pickString(exif.GPSLatitudeRef, exif.LatitudeRef, exif.GPSLatRef);
+    const lngRef = pickString(exif.GPSLongitudeRef, exif.LongitudeRef, exif.GPSLongRef);
+    const latSource = exif.GPSLatitude ?? exif.Latitude ?? exif.latitude ?? exif.GPSLat ?? exif.GPS_Latitude;
+    const lngSource = exif.GPSLongitude ?? exif.Longitude ?? exif.longitude ?? exif.GPSLong ?? exif.GPS_Longitude;
+    const latDms = parseExifDms(latSource);
+    const lngDms = parseExifDms(lngSource);
+
+    const latValue = toDecimalDegrees(latDms);
+    const lngValue = toDecimalDegrees(lngDms);
+
+    if (latValue !== null) {
+      lat = latRef && latRef.toUpperCase() === 'S' ? -latValue : latValue;
+    }
+    if (lngValue !== null) {
+      lng = lngRef && lngRef.toUpperCase() === 'W' ? -lngValue : lngValue;
+    }
+  }
+
+  if ((lat === null || lng === null) && location) {
+    if (typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+      lat = location.latitude;
+      lng = location.longitude;
+    }
+  }
+
+  if (isZeroLatLng(lat, lng)) {
+    lat = null;
+    lng = null;
+  }
+
+  const takenAt =
+    parseExifDate(exif?.DateTimeOriginal) ||
+    parseExifDate(exif?.DateTimeDigitized) ||
+    parseExifDate(exif?.DateTime) ||
+    null;
+
+  if (lat === null && lng === null && !takenAt) return null;
+
+  return {
+    lat,
+    lng,
+    taken_at: takenAt,
+  };
+};
+
+const mergeMeta = (primary?: UploadMeta | null, secondary?: UploadMeta | null): UploadMeta | null => {
+  if (!primary && !secondary) return null;
+  const primaryCoords = normalizeLatLng(primary?.lat, primary?.lng);
+  const secondaryCoords = normalizeLatLng(secondary?.lat, secondary?.lng);
+  const lat = primaryCoords.lat ?? secondaryCoords.lat ?? null;
+  const lng = primaryCoords.lng ?? secondaryCoords.lng ?? null;
+  const taken_at = primary?.taken_at ?? secondary?.taken_at ?? null;
+  if (lat === null && lng === null && !taken_at) return null;
+  return { lat, lng, taken_at };
+};
+
+const extractMetaFromWebUri = async (uri: string): Promise<UploadMeta | null> => {
+  if (!uri) return null;
+  try {
+    const resp = await fetch(uri);
+    const blob = await resp.blob();
+    const mod = await import('exifr');
+    const exifr = (mod as any).default ?? mod;
+    const data = await exifr.parse(blob, { gps: true, exif: true, tiff: true, ifd0: true });
+    if (!data) return null;
+
+    let lat: number | null = null;
+    let lng: number | null = null;
+
+    const dataLat = parseExifNumber(data.latitude);
+    const dataLng = parseExifNumber(data.longitude);
+    if (dataLat !== null) lat = dataLat;
+    if (dataLng !== null) lng = dataLng;
+
+    if (lat === null || lng === null) {
+      const latRef = typeof data.GPSLatitudeRef === 'string' ? data.GPSLatitudeRef : null;
+      const lngRef = typeof data.GPSLongitudeRef === 'string' ? data.GPSLongitudeRef : null;
+      const latDms = parseExifDms(data.GPSLatitude);
+      const lngDms = parseExifDms(data.GPSLongitude);
+      const latValue = toDecimalDegrees(latDms);
+      const lngValue = toDecimalDegrees(lngDms);
+      if (latValue !== null) {
+        lat = latRef && latRef.toUpperCase() === 'S' ? -latValue : latValue;
+      }
+      if (lngValue !== null) {
+        lng = lngRef && lngRef.toUpperCase() === 'W' ? -lngValue : lngValue;
+      }
+    }
+
+    if (isZeroLatLng(lat, lng)) {
+      lat = null;
+      lng = null;
+    }
+
+    const takenAt =
+      parseExifDate(data.DateTimeOriginal) ||
+      parseExifDate(data.DateTimeDigitized) ||
+      parseExifDate(data.DateTime) ||
+      parseExifDate(data.CreateDate) ||
+      parseExifDate(data.ModifyDate) ||
+      null;
+
+    if (lat === null && lng === null && !takenAt) return null;
+    return { lat, lng, taken_at: takenAt };
+  } catch {
+    return null;
+  }
+};
+
+const resizeAndCompressAsset = async (
+  asset: ImagePicker.ImagePickerAsset,
+  rawName: string,
+  ext: string
+): Promise<UploadAsset> => {
+  const width = asset.width ?? 0;
+  const height = asset.height ?? 0;
+  const maxSide = Math.max(width, height);
+  const shouldResize = maxSide > MAX_IMAGE_DIMENSION;
+
+  const actions: ImageManipulator.Action[] = [];
+  if (shouldResize && width > 0 && height > 0) {
+    const scale = MAX_IMAGE_DIMENSION / maxSide;
+    actions.push({
+      resize: {
+        width: Math.round(width * scale),
+        height: Math.round(height * scale),
+      },
+    });
+  }
+
+  const usePng = ext === 'png';
+  const format = usePng ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
+  const outputExt = usePng ? 'png' : 'jpg';
+  const outputMime = usePng ? 'image/png' : 'image/jpeg';
+
+  const result = await ImageManipulator.manipulateAsync(asset.uri, actions, {
+    compress: JPEG_COMPRESS_QUALITY,
+    format,
+  });
+
+  return {
+    uri: result.uri,
+    name: ensureFileNameWithExt(rawName.replace(/\.\w+$/, ''), outputExt),
+    type: outputMime,
+  };
+};
+
 const prepareUploadAsset = async (asset: ImagePicker.ImagePickerAsset): Promise<UploadAsset> => {
   const rawName = getAssetName(asset);
   const ext = getAssetExt(rawName);
   const mimeType = asset.mimeType || (ext ? `image/${ext}` : 'image/jpeg');
-
-  if (isHeicAsset(asset, ext) && Platform.OS !== 'web') {
-    const result = await ImageManipulator.manipulateAsync(
-      asset.uri,
-      [],
-      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    const jpegName = rawName.replace(/\.(heic|heif)$/i, '.jpg');
-    return {
-      uri: result.uri,
-      name: ensureFileNameWithExt(jpegName, 'jpg'),
-      type: 'image/jpeg',
-    };
+  let meta = extractMetaFromAsset(asset);
+  if (Platform.OS === 'web') {
+    const needsWebMeta =
+      !meta || meta.lat === null || meta.lng === null || meta.taken_at === null || meta.taken_at === undefined;
+    if (needsWebMeta) {
+      const webMeta = await extractMetaFromWebUri(asset.uri);
+      meta = mergeMeta(meta, webMeta);
+    }
   }
 
-  return {
-    uri: asset.uri,
-    name: ensureFileNameWithExt(rawName, ext),
-    type: mimeType,
-  };
+  try {
+  const resized = await resizeAndCompressAsset(asset, rawName, ext);
+    return { ...resized, meta };
+  } catch (error) {
+    if (isHeicAsset(asset, ext) && Platform.OS !== 'web') {
+      try {
+        const result = await ImageManipulator.manipulateAsync(
+          asset.uri,
+          [],
+          { compress: JPEG_COMPRESS_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        const jpegName = rawName.replace(/\.(heic|heif)$/i, '.jpg');
+        return {
+          uri: result.uri,
+          name: ensureFileNameWithExt(jpegName, 'jpg'),
+          type: 'image/jpeg',
+          meta,
+        };
+      } catch {
+        // fall through to original
+      }
+    }
+    return {
+      uri: asset.uri,
+      name: ensureFileNameWithExt(rawName, ext),
+      type: mimeType,
+      meta,
+    };
+  }
+};
+
+const formatDateInput = (value?: string | null) => {
+  if (!value) return '';
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
+  } catch {
+    return '';
+  }
+};
+
+const toIsoDate = (value: string) => {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return null;
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 };
 
 export default function UploadScreen() {
@@ -123,6 +483,12 @@ export default function UploadScreen() {
   const [placeAddress, setPlaceAddress] = useState('');
   const [placeCategory, setPlaceCategory] = useState('');
   const [placeMemo, setPlaceMemo] = useState('');
+  const [placeLat, setPlaceLat] = useState<number | null>(null);
+  const [placeLng, setPlaceLng] = useState<number | null>(null);
+  const [isGeocodingAddress, setIsGeocodingAddress] = useState(false);
+  const [isReverseGeocoding, setIsReverseGeocoding] = useState(false);
+  const [visitType, setVisitType] = useState<VisitType>('visited');
+  const [visitDateInput, setVisitDateInput] = useState('');
   const [photos, setPhotos] = useState<PhotoData[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -135,7 +501,7 @@ export default function UploadScreen() {
       .getOptions()
       .then((opts) => {
         if (opts.place_categories?.length) {
-          setPlaceCategories(opts.place_categories.map((o) => o.label));
+          setPlaceCategories(ensureEtcCategory(opts.place_categories.map((o) => o.label)));
         }
       })
       .catch(() => {});
@@ -164,7 +530,8 @@ export default function UploadScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: PICKER_MEDIA_TYPES,
         allowsMultipleSelection: true,
-        quality: 0.8,
+        quality: 1,
+        exif: true,
         selectionLimit: Math.max(0, limits.max_photos - photos.length), // 최대 20장 제한
       });
 
@@ -263,6 +630,9 @@ export default function UploadScreen() {
         }
       }
 
+      const metaPayload = preparedAssets.map((asset) => asset.meta ?? null);
+      formData.append('metas', JSON.stringify(metaPayload));
+
       // 백엔드 API 호출
       const response = await api.postFormData<{
         upload_id: string;
@@ -286,10 +656,15 @@ export default function UploadScreen() {
       });
 
       // 업로드된 사진들을 상태에 추가
-      const newPhotos: PhotoData[] = response.photos.map((photo) => ({
-        ...photo,
-        thumbnail_url: resolveStorageUrl(photo.thumbnail_url),
-      }));
+      const newPhotos: PhotoData[] = response.photos.map((photo) => {
+        const defaultVisitType: VisitType = hasAnyExif(photo.exif) ? 'visited' : 'planned';
+        return {
+          ...photo,
+          thumbnail_url: resolveStorageUrl(photo.thumbnail_url),
+          visit_type: defaultVisitType,
+          visit_date: defaultVisitType === 'visited' ? photo.exif?.taken_at ?? null : null,
+        };
+      });
 
       setUploadId(response.upload_id);
       setPhotos(newPhotos);
@@ -331,12 +706,28 @@ export default function UploadScreen() {
       return;
     }
 
-    const nowIso = new Date().toISOString();
+    const missingVisitDate = photos.some(
+      (p) => !p.exif?.taken_at && p.visit_type !== 'planned' && !p.visit_date
+    );
+    if (missingVisitDate) {
+      Toast.show({
+        type: 'error',
+        text1: '방문 날짜 필요',
+        text2: '방문한 사진의 날짜를 입력해주세요.',
+      });
+      return;
+    }
+
     const spots = photos.map((photo) => {
       const memo = photo.memo?.trim();
+      const visitedAt = photo.exif?.taken_at
+        ? photo.exif.taken_at
+        : photo.visit_type === 'planned'
+          ? null
+          : photo.visit_date || null;
       return {
         photo_id: photo.photo_id,
-        visited_at: photo.exif?.taken_at || nowIso,
+        visited_at: visitedAt,
         place: {
           name: photo.place!.name,
           address: photo.place!.address || null,
@@ -386,7 +777,24 @@ export default function UploadScreen() {
       setPlaceAddress(photo.place?.address || '');
       setPlaceCategory(photo.place?.category || '');
       setPlaceMemo(photo.memo || '');
+      setPlaceLat(photo.place?.lat ?? photo.exif?.lat ?? null);
+      setPlaceLng(photo.place?.lng ?? photo.exif?.lng ?? null);
+      setIsGeocodingAddress(false);
+      setIsReverseGeocoding(false);
+      const defaultVisitType: VisitType =
+        photo.visit_type ?? (hasAnyExif(photo.exif) ? 'visited' : 'planned');
+      setVisitType(defaultVisitType);
+      const initialVisitDate =
+        defaultVisitType === 'planned' ? null : photo.visit_date || photo.exif?.taken_at || null;
+      setVisitDateInput(formatDateInput(initialVisitDate));
       setModalVisible(true);
+    }
+  };
+
+  const handleVisitTypeChange = (next: VisitType) => {
+    setVisitType(next);
+    if (next === 'planned') {
+      setVisitDateInput('');
     }
   };
 
@@ -396,9 +804,31 @@ export default function UploadScreen() {
     }
 
     const target = photos.find((p) => p.photo_id === editingPhotoId);
-    const lat = target?.exif?.lat ?? null;
-    const lng = target?.exif?.lng ?? null;
-    const memoValue = placeMemo.trim();
+    if (!target) return;
+    const allowMemo = visitType === 'visited';
+    const lat = placeLat ?? target?.exif?.lat ?? null;
+    const lng = placeLng ?? target?.exif?.lng ?? null;
+    const memoValue = allowMemo ? placeMemo.trim() : '';
+    const hasExifTakenAt = !!target?.exif?.taken_at;
+    const visitTypeForSave: VisitType = visitType;
+    const showVisitDateInput = visitTypeForSave === 'visited';
+    let visitDateIso: string | null = target?.exif?.taken_at ?? null;
+
+    if (showVisitDateInput) {
+      const iso = toIsoDate(visitDateInput);
+      if (iso) {
+        visitDateIso = iso;
+      } else if (!hasExifTakenAt) {
+        Toast.show({
+          type: 'error',
+          text1: '방문 날짜 필요',
+          text2: '방문한 날짜를 입력해주세요.',
+        });
+        return;
+      }
+    } else if (visitTypeForSave === 'planned') {
+      visitDateIso = null;
+    }
 
     startGlobalLoading();
 
@@ -429,6 +859,8 @@ export default function UploadScreen() {
                 place: response.place,
                 status: 'recognized' as const,
                 memo: memoValue ? memoValue : null,
+                visit_type: visitTypeForSave,
+                visit_date: visitDateIso,
                 thumbnail_url: resolveStorageUrl(response.thumbnail_url) ?? photo.thumbnail_url,
               }
             : photo
@@ -441,6 +873,10 @@ export default function UploadScreen() {
       setPlaceAddress('');
       setPlaceCategory('');
       setPlaceMemo('');
+      setPlaceLat(null);
+      setPlaceLng(null);
+      setVisitType('visited');
+      setVisitDateInput('');
 
       Toast.show({
         type: 'success',
@@ -456,6 +892,150 @@ export default function UploadScreen() {
       });
     } finally {
       endGlobalLoading();
+    }
+  };
+
+  const reverseGeocodeWeb = async (lat: number, lng: number): Promise<string | null> => {
+    const kakao = (globalThis as any).kakao;
+    if (!kakao?.maps?.services) return null;
+    return await new Promise((resolve) => {
+      const geocoder = new kakao.maps.services.Geocoder();
+      geocoder.coord2Address(lng, lat, (result: any[], status: any) => {
+        if (status === kakao.maps.services.Status.OK && result?.[0]) {
+          const road = result[0].road_address?.address_name;
+          const jibun = result[0].address?.address_name;
+          resolve(road || jibun || null);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  };
+
+  const geocodeWeb = async (query: string): Promise<{ lat: number; lng: number; address?: string | null; road_address?: string | null } | null> => {
+    const kakao = (globalThis as any).kakao;
+    if (!kakao?.maps?.services) return null;
+
+    const geocoder = new kakao.maps.services.Geocoder();
+    const addressResult = await new Promise<any | null>((resolve) => {
+      geocoder.addressSearch(query, (result: any[], status: any) => {
+        if (status === kakao.maps.services.Status.OK && result?.[0]) {
+          resolve(result[0]);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+
+    if (addressResult) {
+      return {
+        lat: parseFloat(addressResult.y),
+        lng: parseFloat(addressResult.x),
+        address: addressResult.address_name,
+        road_address: addressResult.road_address_name,
+      };
+    }
+
+    const places = new kakao.maps.services.Places();
+    const placeResult = await new Promise<any | null>((resolve) => {
+      places.keywordSearch(query, (data: any[], status: any) => {
+        if (status === kakao.maps.services.Status.OK && data?.[0]) {
+          resolve(data[0]);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+
+    if (!placeResult) return null;
+    return {
+      lat: parseFloat(placeResult.y),
+      lng: parseFloat(placeResult.x),
+      address: placeResult.address_name,
+      road_address: placeResult.road_address_name,
+    };
+  };
+
+  const handleSelectLocation = async (lat: number, lng: number) => {
+    setPlaceLat(lat);
+    setPlaceLng(lng);
+    setIsReverseGeocoding(true);
+    try {
+      let addr: string | null = null;
+      if (Platform.OS === 'web') {
+        addr = await reverseGeocodeWeb(lat, lng);
+      }
+      if (!addr) {
+        const res = await utilsService.reverseGeocode(lat, lng);
+        addr = res.road_address ?? res.address ?? '';
+      }
+      if (addr) {
+        setPlaceAddress(addr);
+      } else {
+        setPlaceAddress('');
+        Toast.show({
+          type: 'info',
+          text1: '주소 없음',
+          text2: '선택한 위치의 주소를 찾을 수 없습니다.',
+        });
+      }
+    } catch (error: any) {
+      console.error('역지오코딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '주소 조회 실패',
+        text2: error.message || '주소를 불러오는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsReverseGeocoding(false);
+    }
+  };
+
+  const handleGeocodeAddress = async () => {
+    const query = (placeAddress || placeName).trim();
+    if (!query) {
+      Toast.show({
+        type: 'info',
+        text1: '주소 입력 필요',
+        text2: '주소나 장소명을 입력해주세요.',
+      });
+      return;
+    }
+
+    setIsGeocodingAddress(true);
+    try {
+      let res: { lat: number | null; lng: number | null; address?: string | null; road_address?: string | null } | null =
+        null;
+      if (Platform.OS === 'web') {
+        res = await geocodeWeb(query);
+      }
+      if (!res) {
+        res = await utilsService.geocode(query);
+      }
+
+      const addr = res.road_address ?? res.address ?? '';
+      if (addr) {
+        setPlaceAddress(addr);
+      }
+      if (res.lat != null && res.lng != null) {
+        setPlaceLat(res.lat);
+        setPlaceLng(res.lng);
+      } else {
+        Toast.show({
+          type: 'info',
+          text1: '위치 없음',
+          text2: '입력한 주소로 좌표를 찾지 못했습니다.',
+        });
+      }
+    } catch (error: any) {
+      console.error('지오코딩 실패:', error);
+      Toast.show({
+        type: 'error',
+        text1: '주소 검색 실패',
+        text2: error.message || '주소를 찾는 중 오류가 발생했습니다.',
+      });
+    } finally {
+      setIsGeocodingAddress(false);
     }
   };
 
@@ -476,6 +1056,12 @@ export default function UploadScreen() {
 
   const hasIncompletePlaces = photos.some((p) => p.status !== 'recognized' || !p.place);
   const canRegister = !!uploadId && photos.length > 0 && !hasIncompletePlaces && !isUploading && !isRegistering;
+  const editingPhoto = editingPhotoId ? photos.find((p) => p.photo_id === editingPhotoId) : null;
+  const allowMemo = visitType === 'visited';
+  const hasExifTakenAt = !!editingPhoto?.exif?.taken_at;
+  const showVisitType = !!editingPhoto;
+  const showVisitDateInput = showVisitType && visitType === 'visited';
+  const needsVisitDate = showVisitDateInput && !visitDateInput && !hasExifTakenAt;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -593,7 +1179,9 @@ export default function UploadScreen() {
                     )}
                     <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
                       <Text style={styles.photoLink}>
-                        {photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정'}
+                        {photo.visit_type === 'visited'
+                          ? (photo.memo ? '메모/장소 수정' : '메모 추가/장소 수정')
+                          : '장소 수정'}
                       </Text>
                     </Pressable>
                   </>
@@ -601,12 +1189,16 @@ export default function UploadScreen() {
                   <>
                     {photo.exif ? (
                       <>
-                        <Text style={styles.photoDetail}>
-                          EXIF 위치 정보: {photo.exif.lat.toFixed(6)}, {photo.exif.lng.toFixed(6)}
-                        </Text>
-                        <Text style={styles.photoDetail}>
-                          촬영 시간: {formatDateTime(photo.exif.taken_at)}
-                        </Text>
+                        {photo.exif.lat != null && photo.exif.lng != null && (
+                          <Text style={styles.photoDetail}>
+                            EXIF 위치 정보: {photo.exif.lat.toFixed(6)}, {photo.exif.lng.toFixed(6)}
+                          </Text>
+                        )}
+                        {photo.exif.taken_at && (
+                          <Text style={styles.photoDetail}>
+                            촬영 시간: {formatDateTime(photo.exif.taken_at)}
+                          </Text>
+                        )}
                         <Pressable onPress={() => openPlaceModal(photo.photo_id)}>
                           <Text style={styles.photoLink}>장소 정보 입력하기</Text>
                         </Pressable>
@@ -681,6 +1273,12 @@ export default function UploadScreen() {
               setPlaceAddress('');
               setPlaceCategory('');
               setPlaceMemo('');
+              setPlaceLat(null);
+              setPlaceLng(null);
+              setIsGeocodingAddress(false);
+              setIsReverseGeocoding(false);
+              setVisitType('visited');
+              setVisitDateInput('');
             }}
           />
           <View style={styles.modalContent}>
@@ -694,6 +1292,12 @@ export default function UploadScreen() {
                   setPlaceAddress('');
                   setPlaceCategory('');
                   setPlaceMemo('');
+                  setPlaceLat(null);
+                  setPlaceLng(null);
+                  setIsGeocodingAddress(false);
+                  setIsReverseGeocoding(false);
+                  setVisitType('visited');
+                  setVisitDateInput('');
                 }}
                 style={styles.modalCloseButton}>
                 <Ionicons name="close" size={24} color="#64748b" />
@@ -718,14 +1322,101 @@ export default function UploadScreen() {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>주소</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="예) 서울 마포구 독막로 12"
-                  placeholderTextColor="#94a3b8"
-                  value={placeAddress}
-                  onChangeText={setPlaceAddress}
-                />
+                <View style={styles.addressRow}>
+                  <TextInput
+                    style={[styles.input, styles.addressInput]}
+                    placeholder="예) 서울 마포구 독막로 12"
+                    placeholderTextColor="#94a3b8"
+                    value={placeAddress}
+                    onChangeText={setPlaceAddress}
+                  />
+                  <Pressable
+                    style={[
+                      styles.addressSearchButton,
+                      (isGeocodingAddress || !(placeAddress || placeName).trim()) && styles.addressSearchButtonDisabled,
+                    ]}
+                    onPress={handleGeocodeAddress}
+                    disabled={isGeocodingAddress || !(placeAddress || placeName).trim()}>
+                    {isGeocodingAddress ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Text style={styles.addressSearchButtonText}>지도 이동</Text>
+                    )}
+                  </Pressable>
+                </View>
+                <Text style={styles.inputHint}>주소나 장소명을 입력하고 지도 이동을 눌러주세요.</Text>
               </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>지도에서 위치 선택</Text>
+                <View style={styles.mapBox}>
+                  <PlacePickerMap lat={placeLat} lng={placeLng} onSelect={handleSelectLocation} />
+                  {isReverseGeocoding && (
+                    <View style={styles.mapOverlay}>
+                      <ActivityIndicator size="small" color="#64748b" />
+                      <Text style={styles.mapOverlayText}>주소 찾는 중...</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.mapHint}>지도를 눌러 위치를 선택하면 주소가 자동 입력됩니다.</Text>
+              </View>
+
+              {showVisitType && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>방문 여부</Text>
+                  <View style={styles.visitTypeRow}>
+                    <Pressable
+                      style={[
+                        styles.visitTypeButton,
+                        visitType === 'visited' && styles.visitTypeButtonActive,
+                      ]}
+                      onPress={() => handleVisitTypeChange('visited')}>
+                      <Text
+                        style={[
+                          styles.visitTypeButtonText,
+                          visitType === 'visited' && styles.visitTypeButtonTextActive,
+                        ]}>
+                        방문함
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.visitTypeButton,
+                        visitType === 'planned' && styles.visitTypeButtonActive,
+                      ]}
+                      onPress={() => handleVisitTypeChange('planned')}>
+                      <Text
+                        style={[
+                          styles.visitTypeButtonText,
+                          visitType === 'planned' && styles.visitTypeButtonTextActive,
+                        ]}>
+                        방문 예정
+                      </Text>
+                    </Pressable>
+                  </View>
+                  {showVisitDateInput && (
+                    <View style={styles.visitDateBlock}>
+                      <Text style={styles.inputLabel}>방문 날짜 *</Text>
+                      {Platform.OS === 'web' ? (
+                        <WebDateInput
+                          value={visitDateInput}
+                          onChange={setVisitDateInput}
+                          hasError={needsVisitDate}
+                        />
+                      ) : (
+                        <TextInput
+                          style={[styles.input, needsVisitDate && styles.inputError]}
+                          placeholder="YYYY-MM-DD"
+                          placeholderTextColor="#94a3b8"
+                          value={visitDateInput}
+                          onChangeText={setVisitDateInput}
+                        />
+                      )}
+                      <Text style={styles.inputHint}>방문한 날짜를 입력해주세요.</Text>
+                    </View>
+                  )}
+                </View>
+              )}
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>카테고리</Text>
@@ -750,20 +1441,22 @@ export default function UploadScreen() {
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>메모</Text>
-                <TextInput
-                  style={[styles.input, styles.memoInput]}
-                  placeholder="장소에 대한 메모를 남겨주세요"
-                  placeholderTextColor="#94a3b8"
-                  value={placeMemo}
-                  onChangeText={setPlaceMemo}
-                  multiline
-                  textAlignVertical="top"
-                  maxLength={2000}
-                />
-                <Text style={styles.memoHint}>최대 2000자</Text>
-              </View>
+              {allowMemo && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>메모</Text>
+                  <TextInput
+                    style={[styles.input, styles.memoInput]}
+                    placeholder="장소에 대한 메모를 남겨주세요"
+                    placeholderTextColor="#94a3b8"
+                    value={placeMemo}
+                    onChangeText={setPlaceMemo}
+                    multiline
+                    textAlignVertical="top"
+                    maxLength={2000}
+                  />
+                  <Text style={styles.memoHint}>최대 2000자</Text>
+                </View>
+              )}
             </ScrollView>
 
             <View style={styles.modalFooter}>
@@ -1237,6 +1930,11 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginBottom: 8,
   },
+  inputHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#94a3b8',
+  },
   input: {
     backgroundColor: '#f8fafc',
     borderWidth: 1,
@@ -1246,6 +1944,95 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     fontSize: 15,
     color: '#0f172a',
+  },
+  inputError: {
+    borderColor: '#ef4444',
+    borderWidth: 1.5,
+  },
+  visitTypeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  visitTypeButton: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  visitTypeButtonActive: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#6366f1',
+  },
+  visitTypeButtonText: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  visitTypeButtonTextActive: {
+    color: '#4f46e5',
+  },
+  visitDateBlock: {
+    marginTop: 12,
+    gap: 8,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addressInput: {
+    flex: 1,
+  },
+  addressSearchButton: {
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 80,
+  },
+  addressSearchButtonDisabled: {
+    backgroundColor: '#cbd5e1',
+  },
+  addressSearchButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  mapBox: {
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#f1f5f9',
+  },
+  mapHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  mapOverlay: {
+    position: 'absolute',
+    bottom: 12,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  mapOverlayText: {
+    fontSize: 12,
+    color: '#64748b',
   },
   memoInput: {
     minHeight: 110,

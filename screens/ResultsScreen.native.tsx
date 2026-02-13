@@ -527,29 +527,6 @@ export default function ResultsScreen() {
     });
   }, [editedPlan]);
 
-  // 장소 순서 이동 (위/아래)
-  const movePlace = useCallback((dayKey: string, fromIndex: number, direction: 'up' | 'down') => {
-    if (!editedPlan) return;
-
-    const toIndex = direction === 'up' ? fromIndex - 1 : fromIndex + 1;
-    const updatedPlan = deepClone(editedPlan);
-    const dayPlan = updatedPlan.variants[dayKey];
-    const timeline = [...dayPlan.timelines.fastest_version];
-
-    if (toIndex < 0 || toIndex >= timeline.length) return;
-
-    // 아이템 교환
-    [timeline[fromIndex], timeline[toIndex]] = [timeline[toIndex], timeline[fromIndex]];
-
-    dayPlan.timelines.fastest_version = recalculateTimes(timeline);
-
-    // route 배열도 순서 맞추기
-    const routeOrder = dayPlan.timelines.fastest_version.map((t) => t.name);
-    dayPlan.route.sort((a, b) => routeOrder.indexOf(a.name) - routeOrder.indexOf(b.name));
-
-    setEditedPlan(updatedPlan);
-  }, [editedPlan]);
-
   // 장소 선택 토글
   const toggleSpotSelection = useCallback((spotName: string) => {
     setSelectedSpots((prev) => {
@@ -1426,21 +1403,6 @@ export default function ResultsScreen() {
                         >
                           <Ionicons name="trash-outline" size={16} color="#ef4444" />
                         </Pressable>
-                        {/* 순서 이동 버튼 */}
-                        <Pressable
-                          style={[styles.editActionButton, idx === 0 && styles.editActionButtonDisabled]}
-                          onPress={() => movePlace(activeDay, idx, 'up')}
-                          disabled={idx === 0}
-                        >
-                          <Ionicons name="chevron-up" size={18} color={idx === 0 ? '#d1d5db' : '#6366f1'} />
-                        </Pressable>
-                        <Pressable
-                          style={[styles.editActionButton, idx === timeline.length - 1 && styles.editActionButtonDisabled]}
-                          onPress={() => movePlace(activeDay, idx, 'down')}
-                          disabled={idx === timeline.length - 1}
-                        >
-                          <Ionicons name="chevron-down" size={18} color={idx === timeline.length - 1 ? '#d1d5db' : '#6366f1'} />
-                        </Pressable>
                       </View>
                     ) : (
                       <View style={styles.detailButton}>
@@ -2072,17 +2034,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 8,
     gap: 4,
-  },
-  editActionButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: '#eef2ff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  editActionButtonDisabled: {
-    backgroundColor: '#f8fafc',
   },
   editDeleteButton: {
     width: 32,

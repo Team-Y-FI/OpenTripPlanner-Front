@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '@/contexts/AuthContext';
 
 const LAST_GENERATED_PLAN_KEY = 'LAST_GENERATED_PLAN';
+const getLastGeneratedPlanKey = (userId?: string | null) =>
+  userId ? `${LAST_GENERATED_PLAN_KEY}:${userId}` : null;
 
 export interface Place {
   id: string;
@@ -65,6 +68,8 @@ const defaultPlanForm: PlanForm = {
 const PlacesContext = createContext<PlacesContextType | undefined>(undefined);
 
 export function PlacesProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const userId = user?.user_id ?? null;
   const [selectedPlaces, setSelectedPlaces] = useState<Place[]>([]);
   const [planForm, setPlanForm] = useState<PlanForm>(defaultPlanForm);
   const [lastGeneratedPlan, setLastGeneratedPlanState] = useState<unknown>(null);
@@ -72,20 +77,33 @@ export function PlacesProvider({ children }: { children: ReactNode }) {
   const [courseGenerationStatus, setCourseGenerationStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [courseGenerationMessage, setCourseGenerationMessage] = useState<string | undefined>(undefined);
 
-  // 새로고침 후에도 마지막 코스 결과 유지: 로컬 저장소에서 복원
+  // 새로고침 후에도 마지막 코스 결과 유지: 사용자별 로컬 저장소에서 복원
   useEffect(() => {
+    let isActive = true;
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(LAST_GENERATED_PLAN_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as unknown;
-          if (parsed != null) setLastGeneratedPlanState(parsed);
-        }
+        // 계정 전환 시 이전 사용자 데이터가 보이지 않도록 즉시 초기화
+        setLastGeneratedPlanState(null);
+
+        // 레거시 전역 키 제거 (계정 간 캐시 누수 방지)
+        await AsyncStorage.removeItem(LAST_GENERATED_PLAN_KEY);
+
+        const key = getLastGeneratedPlanKey(userId);
+        if (!key) return;
+
+        const raw = await AsyncStorage.getItem(key);
+        if (!raw) return;
+
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed != null && isActive) setLastGeneratedPlanState(parsed);
       } catch {
         // 저장된 값이 없거나 파싱 실패 시 무시
       }
     })();
-  }, []);
+    return () => {
+      isActive = false;
+    };
+  }, [userId]);
 
   const addPlace = (place: Place) => {
     setSelectedPlaces((prev) => [...prev, place]);
@@ -114,27 +132,32 @@ export function PlacesProvider({ children }: { children: ReactNode }) {
     setLastGeneratedPlanState(plan);
     (async () => {
       try {
+        const key = getLastGeneratedPlanKey(userId);
+        if (!key) return;
+
         if (plan != null) {
-          await AsyncStorage.setItem(LAST_GENERATED_PLAN_KEY, JSON.stringify(plan));
+          await AsyncStorage.setItem(key, JSON.stringify(plan));
         } else {
-          await AsyncStorage.removeItem(LAST_GENERATED_PLAN_KEY);
+          await AsyncStorage.removeItem(key);
         }
       } catch {
         // 저장 실패 시 메모리 상태만 유지
       }
     })();
-  }, []);
+  }, [userId]);
 
   const clearGeneratedPlan = useCallback(() => {
     setLastGeneratedPlanState(null);
     (async () => {
       try {
-        await AsyncStorage.removeItem(LAST_GENERATED_PLAN_KEY);
+        const key = getLastGeneratedPlanKey(userId);
+        if (!key) return;
+        await AsyncStorage.removeItem(key);
       } catch {
         // 무시
       }
     })();
-  }, []);
+  }, [userId]);
 
   const reportCourseGenerationComplete = (status: 'success' | 'error', message?: string) => {
     setIsCourseGenerating(false);
