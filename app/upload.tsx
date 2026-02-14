@@ -75,7 +75,7 @@ const DEFAULT_LIMITS: UploadLimits = {
 const ensureEtcCategory = (items: string[]) =>
   items.includes('기타') ? items : [...items, '기타'];
 
-const DEFAULT_PLACE_CATEGORIES = ensureEtcCategory(["카페", "맛집", "전시", "공원", "야경", "쇼핑"]);
+const DEFAULT_PLACE_CATEGORIES = ensureEtcCategory(["카페", "관광지", "문화시설", "쇼핑", "음식점"]);
 
 const webDateInputBaseStyle: any = {
   width: '100%',
@@ -777,8 +777,10 @@ export default function UploadScreen() {
       setPlaceAddress(photo.place?.address || '');
       setPlaceCategory(photo.place?.category || '');
       setPlaceMemo(photo.memo || '');
-      setPlaceLat(photo.place?.lat ?? photo.exif?.lat ?? null);
-      setPlaceLng(photo.place?.lng ?? photo.exif?.lng ?? null);
+      const initialLat = photo.place?.lat ?? photo.exif?.lat ?? null;
+      const initialLng = photo.place?.lng ?? photo.exif?.lng ?? null;
+      setPlaceLat(initialLat);
+      setPlaceLng(initialLng);
       setIsGeocodingAddress(false);
       setIsReverseGeocoding(false);
       const defaultVisitType: VisitType =
@@ -788,6 +790,27 @@ export default function UploadScreen() {
         defaultVisitType === 'planned' ? null : photo.visit_date || photo.exif?.taken_at || null;
       setVisitDateInput(formatDateInput(initialVisitDate));
       setModalVisible(true);
+
+      // 좌표는 있지만 이름/주소가 없으면 자동 역지오코딩
+      const hasName = !!(photo.place?.name);
+      const hasAddress = !!(photo.place?.address);
+      if (initialLat != null && initialLng != null && !hasName && !hasAddress) {
+        setIsReverseGeocoding(true);
+        (async () => {
+          try {
+            let addr: string | null = null;
+            if (Platform.OS === 'web') {
+              addr = await reverseGeocodeWeb(initialLat, initialLng);
+            }
+            if (!addr) {
+              const res = await utilsService.reverseGeocode(initialLat, initialLng);
+              addr = res.road_address ?? res.address ?? '';
+            }
+            if (addr) setPlaceAddress(addr);
+          } catch { /* ignore */ }
+          finally { setIsReverseGeocoding(false); }
+        })();
+      }
     }
   };
 
@@ -1350,7 +1373,7 @@ export default function UploadScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>지도에서 위치 선택</Text>
                 <View style={styles.mapBox}>
-                  <PlacePickerMap lat={placeLat} lng={placeLng} onSelect={handleSelectLocation} />
+                  <PlacePickerMap lat={placeLat} lng={placeLng} name={placeName} address={placeAddress} onSelect={handleSelectLocation} />
                   {isReverseGeocoding && (
                     <View style={styles.mapOverlay}>
                       <ActivityIndicator size="small" color="#64748b" />
