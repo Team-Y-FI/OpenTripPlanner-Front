@@ -147,6 +147,7 @@ function WebDateInput({
     <input
       type="date"
       value={value}
+      max="9999-12-31"
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       style={{
@@ -418,8 +419,6 @@ export default function CourseWeb() {
   };
 
   const confirmAddFixed = () => {
-    console.log("draftPlace: ", draftPlace);
-    
     const err =
       draftForm.startTime && draftForm.endTime
         ? isTimeEndAfterStart(draftForm.startTime, draftForm.endTime)
@@ -528,12 +527,11 @@ export default function CourseWeb() {
     "사진 찍기",
     "맛집 위주",
   ];
-  const categories = ["카페", "관광지", "문화시설", "쇼핑", "음식점"];
+  const categories = ["카페", "관광지", "문화시설", "쇼핑"];
 
   // UI 카테고리를 API category 값으로 매핑
   const categoryMap: Record<string, CreateCourseRequest["category"]> = {
     카페: "cafe",
-    음식점: "restaurant",
     문화시설: "culture",
     관광지: "attraction",
     쇼핑: "shopping",

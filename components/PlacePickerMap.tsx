@@ -50,13 +50,34 @@ const loadKakaoMapsScript = (): Promise<void> => {
 type PlacePickerMapProps = {
   lat: number | null;
   lng: number | null;
+  name?: string | null;
+  address?: string | null;
   onSelect: (lat: number, lng: number) => void;
 };
 
-export default function PlacePickerMap({ lat, lng, onSelect }: PlacePickerMapProps) {
+export default function PlacePickerMap({ lat, lng, name, address, onSelect }: PlacePickerMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
+  const overlayRef = useRef<any>(null);
+
+  const updateOverlay = (position: any, map: any) => {
+    if (overlayRef.current) {
+      overlayRef.current.setMap(null);
+      overlayRef.current = null;
+    }
+    const label = name?.trim();
+    const addr = address?.trim();
+    if (!label && !addr) return;
+    const addressLine = addr ? `<div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;">${addr}</div>` : '';
+    const nameLine = label ? `<div style="font-size:13px;font-weight:700;color:#1e293b;white-space:nowrap;">${label}</div>` : '';
+    overlayRef.current = new window.kakao.maps.CustomOverlay({
+      position,
+      content: `<div style="padding:8px 12px;background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);border:1px solid #e2e8f0;">${nameLine}${addressLine}</div>`,
+      yAnchor: 2.2,
+      map,
+    });
+  };
 
   useEffect(() => {
     if (!containerRef.current || !KAKAO_API_KEY) return;
@@ -77,6 +98,13 @@ export default function PlacePickerMap({ lat, lng, onSelect }: PlacePickerMapPro
         });
         mapRef.current = map;
 
+        // 초기 좌표가 있으면 마커와 오버레이를 즉시 생성
+        if (lat != null && lng != null) {
+          const position = new window.kakao.maps.LatLng(lat, lng);
+          markerRef.current = new window.kakao.maps.Marker({ position, map });
+          updateOverlay(position, map);
+        }
+
         window.kakao.maps.event.addListener(map, 'click', (mouseEvent: any) => {
           const clickedLat = mouseEvent.latLng.getLat();
           const clickedLng = mouseEvent.latLng.getLng();
@@ -94,6 +122,10 @@ export default function PlacePickerMap({ lat, lng, onSelect }: PlacePickerMapPro
         markerRef.current.setMap(null);
         markerRef.current = null;
       }
+      if (overlayRef.current) {
+        overlayRef.current.setMap(null);
+        overlayRef.current = null;
+      }
       return;
     }
 
@@ -103,8 +135,10 @@ export default function PlacePickerMap({ lat, lng, onSelect }: PlacePickerMapPro
     } else {
       markerRef.current.setPosition(position);
     }
+    updateOverlay(position, mapRef.current);
     mapRef.current.setCenter(position);
-  }, [lat, lng]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lat, lng, name, address]);
 
   return (
     <div
