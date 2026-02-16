@@ -1,8 +1,7 @@
 // /services/api.ts
 
 // .env에서 API URL 가져오기
-export const API_URL =
-  process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp";
+export const API_URL = process.env.EXPO_PUBLIC_API_URL || "/otp";
 
 interface RequestOptions extends RequestInit {
   requiresAuth?: boolean;
