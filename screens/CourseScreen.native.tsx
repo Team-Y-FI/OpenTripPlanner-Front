@@ -441,12 +441,11 @@ export default function CourseScreen() {
   };
 
   const purposes = ['데이트', '혼자 시간', '친구들과', '가족 나들이', '사진 찍기', '맛집 위주'];
-  const categories = ['카페', '관광지', '문화시설', '쇼핑', '음식점'];
+  const categories = ['카페', '관광지', '문화시설', '쇼핑'];
 
   // UI 카테고리를 API category 값으로 매핑
   const categoryMap: Record<string, CreateCourseRequest['category']> = {
     '카페': 'cafe',
-    '음식점': 'restaurant',
     '문화시설': 'culture',
     '관광지': 'attraction',
     '쇼핑': 'shopping',
