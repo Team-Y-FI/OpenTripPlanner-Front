@@ -257,11 +257,28 @@ export default function CourseWeb() {
   const [modalShowResults, setModalShowResults] = useState(false);
   const [modalIsSearching, setModalIsSearching] = useState(false);
   const [reverseGeocoding, setReverseGeocoding] = useState(false);
-  const shouldMoveMapRef = useRef(false); // 검색 결과 선택 시에만 true (ref로 변경하여 불필요한 리렌더링 방지)
   const modalSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modalMapContainerRef = useRef<HTMLDivElement | null>(null);
   const modalMapInstance = useRef<any>(null);
   const modalMarkerRef = useRef<any>(null);
+  const searchMarkerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 지도에 마커를 직접 배치하는 헬퍼 (useEffect 대신 직접 호출)
+  const placeMarkerOnMap = (lat: number, lng: number, moveToLocation: boolean) => {
+    if (!window.kakao || !modalMapInstance.current) return;
+    if (modalMarkerRef.current) {
+      modalMarkerRef.current.setMap(null);
+      modalMarkerRef.current = null;
+    }
+    const pos = new window.kakao.maps.LatLng(lat, lng);
+    const marker = new window.kakao.maps.Marker({ position: pos });
+    marker.setMap(modalMapInstance.current);
+    modalMarkerRef.current = marker;
+    if (moveToLocation) {
+      modalMapInstance.current.setCenter(pos);
+      modalMapInstance.current.setLevel(3);
+    }
+  };
 
   const openAddFixedModal = () => {
     setAddFixedModalVisible(true);
@@ -328,6 +345,7 @@ export default function CourseWeb() {
 
       if (addrFromKakao) {
         setDraftPlace({ lat, lng, placeName: addrFromKakao, address: addrFromKakao });
+        placeMarkerOnMap(lat, lng, false);
         return;
       }
 
@@ -340,9 +358,11 @@ export default function CourseWeb() {
       } else {
         setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
       }
+      placeMarkerOnMap(lat, lng, false);
     } catch (err) {
       console.error('역지오코딩 실패:', err);
       setDraftPlace({ lat, lng, placeName: noAddressText, address: '' });
+      placeMarkerOnMap(lat, lng, false);
     } finally {
       setReverseGeocoding(false);
     }
@@ -399,7 +419,6 @@ export default function CourseWeb() {
 
   const selectModalSearchResult = (result: SearchResult) => {
     const { lat, lng } = result.geometry.location;
-    shouldMoveMapRef.current = true; // 검색 결과 선택 시 지도 이동 필요
     setDraftPlace({
       lat,
       lng,
@@ -409,6 +428,15 @@ export default function CourseWeb() {
     setModalSearchQuery("");
     setModalSearchResults([]);
     setModalShowResults(false);
+
+    // 검색 오버레이 DOM 제거가 완료된 후 마커를 생성해야 정상 렌더링됨
+    if (searchMarkerTimerRef.current) {
+      clearTimeout(searchMarkerTimerRef.current);
+    }
+    searchMarkerTimerRef.current = setTimeout(() => {
+      placeMarkerOnMap(lat, lng, true);
+      searchMarkerTimerRef.current = null;
+    }, 300);
   };
 
   const setDraftFormField = <K extends keyof typeof draftForm>(
@@ -638,31 +666,6 @@ export default function CourseWeb() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addFixedModalVisible]);
 
-  // 모달 지도: draftPlace 변경 시 마커 갱신 (검색 결과 선택 시에만 지도 이동)
-  useEffect(() => {
-    if (!window.kakao || !modalMapInstance.current || !addFixedModalVisible)
-      return;
-    if (modalMarkerRef.current) {
-      modalMarkerRef.current.setMap(null);
-      modalMarkerRef.current = null;
-    }
-    if (draftPlace) {
-      const markerPosition = new window.kakao.maps.LatLng(
-        draftPlace.lat,
-        draftPlace.lng,
-      );
-      modalMarkerRef.current = new window.kakao.maps.Marker({
-        position: markerPosition,
-        map: modalMapInstance.current,
-      });
-      // 검색 결과 선택 시에만 지도 이동 (지도 클릭 시에는 이동하지 않음)
-      if (shouldMoveMapRef.current) {
-        modalMapInstance.current.panTo(markerPosition);
-        modalMapInstance.current.setLevel(3);
-        shouldMoveMapRef.current = false;
-      }
-    }
-  }, [addFixedModalVisible, draftPlace]);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -2166,7 +2169,7 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
   },
   addFixedModalMapSection: {
-    height: width * 0.3,
+    height: width * 0.4,
     position: "relative",
     marginBottom: 16,
   },
