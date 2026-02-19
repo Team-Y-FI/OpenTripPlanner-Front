@@ -403,18 +403,6 @@ export default function RecordsScreen() {
                       )}
                     </View>
                     <Text style={styles.planMeta}>{plan.region} · {plan.date}</Text>
-                    {variants && (
-                      <View style={styles.planVariantRow}>
-                        <View style={styles.planVariantBadge}>
-                          <Text style={styles.planVariantLabel}>A</Text>
-                          <Text style={styles.planVariantText}>{variants.A || '기본 추천'}</Text>
-                        </View>
-                        <View style={styles.planVariantBadge}>
-                          <Text style={styles.planVariantLabel}>B</Text>
-                          <Text style={styles.planVariantText}>{variants.B || '대체 추천'}</Text>
-                        </View>
-                      </View>
-                    )}
                   </Pressable>
                 );
               })

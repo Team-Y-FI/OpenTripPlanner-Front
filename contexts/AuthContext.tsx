@@ -1,3 +1,6 @@
+import * as AuthSession from "expo-auth-session";
+import Constants from "expo-constants";
+import * as WebBrowser from "expo-web-browser";
 import React, {
   createContext,
   useContext,
@@ -7,13 +10,10 @@ import React, {
 } from "react";
 import { Platform } from "react-native";
 import Toast from "react-native-toast-message";
-import * as AuthSession from "expo-auth-session";
-import * as WebBrowser from "expo-web-browser";
-import Constants from "expo-constants";
 
 import {
-  authService,
   api,
+  authService,
   tokenManager,
   type User as AuthUser,
 } from "@/services";
@@ -199,9 +199,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * ✅ Expo Go fallback: Web OAuth
    */
   const kakaoOAuthFallback = async (): Promise<boolean> => {
-    const apiUrl = (
-      process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp"
-    ).replace(/\/$/, "");
+    const apiUrl = (process.env.EXPO_PUBLIC_API_URL || "/otp").replace(
+      /\/$/,
+      "",
+    );
 
     // ✅ 핵심: Expo Go에서 exp://8081 복귀(=Metro 의존)를 피하기 위해 useProxy 사용
     const redirectUri = AuthSession.makeRedirectUri({ path: "kakao-callback" });
@@ -271,9 +272,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const kakaoLoginHandler = async (): Promise<boolean> => {
     // web: 기존 redirect 방식 유지
     if (Platform.OS === "web") {
-      const apiUrl = (
-        process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000/otp"
-      ).replace(/\/$/, "");
+      const apiUrl = (process.env.EXPO_PUBLIC_API_URL || "/otp").replace(
+        /\/$/,
+        "",
+      );
       const loginUrl = `${apiUrl}/auth/kakao/login`;
 
       try {
