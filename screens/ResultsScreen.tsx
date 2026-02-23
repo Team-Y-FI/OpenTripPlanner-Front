@@ -1,4 +1,5 @@
 import { useAuth } from "@/contexts/AuthContext";
+import { createPortal } from "react-dom";
 import { usePlaces } from "@/contexts/PlacesContext";
 import {
   planService,
@@ -935,6 +936,16 @@ export default function ResultsScreen() {
       );
       setEditedPlan(updatedPlan);
 
+      // 삭제된 장소가 체크된 상태였다면 선택 해제
+      if (placeToDelete?.name) {
+        setSelectedSpots((prev) => {
+          if (!prev.has(placeToDelete.name)) return prev;
+          const newSet = new Set(prev);
+          newSet.delete(placeToDelete.name);
+          return newSet;
+        });
+      }
+
       Toast.show({
         type: "info",
         text1: "목록에서 제거됨",
@@ -1207,7 +1218,7 @@ export default function ResultsScreen() {
           "";
         const displayName =
           (fixedEventItem as any).title &&
-          (fixedEventItem as any).title !== placeName
+            (fixedEventItem as any).title !== placeName
             ? (fixedEventItem as any).title
             : "고정일정";
         locations.push({
@@ -1631,8 +1642,12 @@ export default function ResultsScreen() {
               <>
                 <View style={styles.editToolbarActions}>
                   <Pressable
-                    style={styles.editToolbarButton}
+                    style={[
+                      styles.editToolbarButton,
+                      isRecalculating && { opacity: 0.4 },
+                    ]}
                     onPress={cancelEditMode}
+                    disabled={isRecalculating}
                   >
                     <Text style={styles.editToolbarButtonText}>취소</Text>
                   </Pressable>
@@ -1643,7 +1658,7 @@ export default function ResultsScreen() {
                         styles.editToolbarPrimaryButton,
                       ]}
                       onPress={requestAlternatives}
-                      disabled={isLoadingAlternatives}
+                      disabled={isLoadingAlternatives || isRecalculating}
                     >
                       <Text style={styles.editToolbarPrimaryText}>
                         {isLoadingAlternatives
@@ -1653,8 +1668,12 @@ export default function ResultsScreen() {
                     </Pressable>
                   )}
                   <Pressable
-                    style={styles.editToolbarIconButton}
+                    style={[
+                      styles.editToolbarIconButton,
+                      isRecalculating && { opacity: 0.4 },
+                    ]}
                     onPress={resetToOriginal}
+                    disabled={isRecalculating}
                   >
                     <Ionicons name="refresh" size={18} color="#64748b" />
                   </Pressable>
@@ -1662,11 +1681,13 @@ export default function ResultsScreen() {
                     style={[
                       styles.editToolbarButton,
                       styles.editToolbarPrimaryOutline,
+                      isRecalculating && { opacity: 0.6 },
                     ]}
                     onPress={saveAndExitEditMode}
+                    disabled={isRecalculating}
                   >
                     <Text style={styles.editToolbarPrimaryOutlineText}>
-                      완료
+                      {isRecalculating ? "처리 중..." : "완료"}
                     </Text>
                   </Pressable>
                 </View>
@@ -1753,8 +1774,8 @@ export default function ResultsScreen() {
               {timeline.map((item, idx) => {
                 const travelInfo =
                   idx > 0 ||
-                  (item.transit_to_here?.length > 0 &&
-                    item.category !== "고정일정")
+                    (item.transit_to_here?.length > 0 &&
+                      item.category !== "고정일정")
                     ? extractTravelInfo(item.transit_to_here)
                     : null;
                 const isHovered = hoveredItem === idx;
@@ -1936,8 +1957,8 @@ export default function ResultsScreen() {
                                                 ? step.rawText.includes("여유")
                                                   ? "출발 전 여유"
                                                   : step.rawText.includes(
-                                                        "현장",
-                                                      )
+                                                    "현장",
+                                                  )
                                                     ? "현장 대기"
                                                     : "대기"
                                                 : step.type === "car"
@@ -2097,8 +2118,8 @@ export default function ResultsScreen() {
         </View>
       </View>
 
-      {/* 대체 장소 추천 모달 */}
-      {alternativesModalVisible && (
+      {/* 대체 장소 추천 모달 - portal로 document.body에 렌더링해 탭바 위에 표시 */}
+      {alternativesModalVisible && createPortal(
         <div
           style={{
             position: "fixed",
@@ -2123,9 +2144,10 @@ export default function ResultsScreen() {
               borderTopRightRadius: 20,
               width: "100%",
               maxHeight: "80%",
-              paddingBottom: 40,
               overflow: "hidden",
               position: "relative",
+              display: "flex",
+              flexDirection: "column",
             }}
           >
             <View style={styles.modalHeader}>
@@ -2145,14 +2167,23 @@ export default function ResultsScreen() {
                   <Text style={styles.replacementLabel}>
                     {spotName}의 대체 추천
                   </Text>
-                  {alternatives
-                    .filter((alt) => {
+                  {(() => {
+                    const filteredAlts = alternatives.filter((alt) => {
                       const originalSpot = timeline.find(
                         (item) => item.name === spotName,
                       );
                       return originalSpot?.category === alt.category;
-                    })
-                    .map((alt, altIdx) => {
+                    });
+
+                    if (filteredAlts.length === 0) {
+                      return (
+                        <Text style={styles.noAlternativeText}>
+                          대체 추천 장소 없음
+                        </Text>
+                      );
+                    }
+
+                    return filteredAlts.map((alt, altIdx) => {
                       const isSelected =
                         selectedAltMap.get(spotName)?.name === alt.name;
                       return (
@@ -2195,7 +2226,8 @@ export default function ResultsScreen() {
                           </View>
                         </Pressable>
                       );
-                    })}
+                    });
+                  })()}
                 </View>
               ))}
             </ScrollView>
@@ -2224,7 +2256,8 @@ export default function ResultsScreen() {
               </Pressable>
             </View>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </SafeAreaView>
   );
@@ -2990,7 +3023,6 @@ const styles = StyleSheet.create({
   alternativesList: {
     flex: 1,
     paddingHorizontal: 20,
-    maxHeight: 400,
   },
   spotReplacementSection: {
     marginBottom: 24,
@@ -3000,6 +3032,12 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#0f172a",
     marginBottom: 12,
+  },
+  noAlternativeText: {
+    fontSize: 14,
+    color: "#94a3b8",
+    fontStyle: "italic",
+    paddingVertical: 8,
   },
   alternativeCard: {
     backgroundColor: "#f8fafc",
