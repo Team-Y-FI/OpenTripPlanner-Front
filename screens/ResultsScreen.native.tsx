@@ -459,17 +459,20 @@ export default function ResultsScreen() {
   const saveAndExitEditMode = useCallback(() => {
     if (editedPlan) {
       setLastGeneratedPlan(editedPlan);
-      Toast.show({
-        type: 'success',
-        text1: '저장 완료',
-        text2: '일정이 수정되었습니다.',
-        position: 'top',
-        visibilityTime: 2000,
-      });
     }
     setIsEditMode(false);
     setEditedPlan(null);
     setOriginalPlan(null);
+    setSelectedSpots(new Set());
+    setAlternativesModalVisible(false);
+    setAlternatives([]);
+    Toast.show({
+      type: 'success',
+      text1: '저장 완료',
+      text2: '일정이 수정되었습니다.',
+      position: 'bottom',
+      visibilityTime: 3000,
+    });
   }, [editedPlan, setLastGeneratedPlan]);
 
   // 편집 취소
@@ -517,6 +520,16 @@ export default function ResultsScreen() {
     dayPlan.timelines.fastest_version = recalculateTimes(dayPlan.timelines.fastest_version);
 
     setEditedPlan(updatedPlan);
+
+    // 삭제된 장소가 체크된 상태였다면 선택 해제
+    if (placeToDelete?.name) {
+      setSelectedSpots((prev) => {
+        if (!prev.has(placeToDelete.name)) return prev;
+        const newSet = new Set(prev);
+        newSet.delete(placeToDelete.name);
+        return newSet;
+      });
+    }
 
     Toast.show({
       type: 'success',
@@ -989,7 +1002,11 @@ export default function ResultsScreen() {
                   <Ionicons name="refresh" size={18} color="#64748b" />
                 </Pressable>
                 <Pressable
-                  style={[styles.editToolbarButton, styles.editToolbarPrimaryOutline]}
+                  style={({ pressed }) => [
+                    styles.editToolbarButton,
+                    styles.editToolbarPrimaryOutline,
+                    pressed && { opacity: 0.6 },
+                  ]}
                   onPress={saveAndExitEditMode}
                 >
                   <Text style={styles.editToolbarPrimaryOutlineText}>완료</Text>
@@ -1458,14 +1475,22 @@ export default function ResultsScreen() {
               {Array.from(selectedSpots).map((spotName) => (
                 <View key={spotName} style={styles.spotReplacementSection}>
                   <Text style={styles.replacementLabel}>{spotName} →</Text>
-                  {alternatives
-                    .filter((alt) => {
-                      // 같은 카테고리인 대체 장소만 표시 (간단한 필터링)
-                      const originalSpot = timeline.find((item) => item.name === spotName);
-                      return originalSpot?.category === alt.category;
-                    })
-                    .slice(0, 3)  // 최대 3개만 표시
-                    .map((alt, altIdx) => (
+                  {(() => {
+                    const filteredAlts = alternatives
+                      .filter((alt) => {
+                        // 같은 카테고리인 대체 장소만 표시 (간단한 필터링)
+                        const originalSpot = timeline.find((item) => item.name === spotName);
+                        return originalSpot?.category === alt.category;
+                      })
+                      .slice(0, 3); // 최대 3개만 표시
+
+                    if (filteredAlts.length === 0) {
+                      return (
+                        <Text style={styles.noAlternativeText}>대체 추천 장소 없음</Text>
+                      );
+                    }
+
+                    return filteredAlts.map((alt, altIdx) => (
                       <Pressable
                         key={altIdx}
                         style={styles.alternativeCard}
@@ -1492,7 +1517,8 @@ export default function ResultsScreen() {
                           <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
                         </View>
                       </Pressable>
-                    ))}
+                    ));
+                  })()}
                 </View>
               ))}
             </ScrollView>
@@ -2324,6 +2350,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#0f172a',
     marginBottom: 12,
+  },
+  noAlternativeText: {
+    fontSize: 14,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+    paddingVertical: 8,
   },
   alternativeCard: {
     backgroundColor: '#f8fafc',
